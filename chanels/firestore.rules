@@ -1,0 +1,115 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ფუნქცია ამოწმებს, არის თუ არა მომხმარებელი ავტორიზებული
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // ფუნქცია ამოწმებს, არის თუ არა მომხმარებელი ადმინისტრატორი
+    function isAdmin() {
+      return isAuthenticated() && 
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true || 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.admin == true || 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.admin == true);
+    }
+    
+    // ფუნქცია ამოწმებს, არის თუ არა მიმდინარე მომხმარებელი დოკუმენტის მფლობელი
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // ძირითადი წესები
+    match /products/{productId} {
+      // ნებისმიერს შეუძლია პროდუქტების წაკითხვა
+      allow read: if true;
+      
+      // მხოლოდ ავტორიზებულ მომხმარებელს შეუძლია პროდუქტის შექმნა
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      
+      // მხოლოდ მფლობელს შეუძლია პროდუქტის განახლება
+      allow update: if isOwner(resource.data.userId);
+      
+      // მხოლოდ მფლობელს ან ადმინისტრატორს შეუძლია პროდუქტის წაშლა
+      allow delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+    
+    match /users/{userId} {
+      // მომხმარებელს შეუძლია საკუთარი პროფილის წაკითხვა და განახლება
+      allow read, write: if isOwner(userId);
+      
+      // ადმინისტრატორს შეუძლია ნებისმიერი მომხმარებლის წაკითხვა
+      allow read: if isAdmin();
+      
+      // ადმინისტრატორის წესების განახლება მხოლოდ მაშინ, თუ ადმინისტრატორია
+      allow update: if isAdmin() && 
+        (request.resource.data.isAdmin == resource.data.isAdmin && 
+         request.resource.data.admin == resource.data.admin && 
+         request.resource.data.roles.admin == resource.data.roles.admin);
+      
+      // ფავორიტების კოლექცია
+      match /favorites/{favoriteId} {
+        allow read, write: if isOwner(userId);
+      }
+      
+      // ჩატების სია - ნებისმიერ ავტორიზებულ მომხმარებელს შეუძლია დაამატოს ჩატი
+      match /chatList/{chatId} {
+        allow read: if isOwner(userId);
+        allow create, update: if isAuthenticated();
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+    }
+    
+    match /chats/{chatId} {
+      // ჩატი ხელმისაწვდომია მხოლოდ იმ მომხმარებლებისთვის, რომლებიც მონაწილეობენ ან ადმინისტრატორებისთვის
+      allow read: if isAuthenticated() && 
+        (resource.data.participants.hasAny([request.auth.uid]) || 
+         isAdmin());
+      
+      // ნებისმიერ ავტორიზებულ მომხმარებელს შეუძლია შექმნას ჩატი - გამარტივებული წესები
+      allow create: if isAuthenticated();
+      
+      // ჩატის განახლება შეუძლია მონაწილეს ან ადმინისტრატორს
+      allow update: if isAuthenticated() && 
+        (resource.data.participants.hasAny([request.auth.uid]) || 
+         isAdmin());
+      
+      // ჩატის წაშლა შეუძლია მონაწილეს ან ადმინისტრატორს
+      allow delete: if isAuthenticated() &&
+        (resource.data.participants.hasAny([request.auth.uid]) ||
+         isAdmin());
+      
+      match /messages/{messageId} {
+        allow read: if isAuthenticated() && 
+          (get(/databases/$(database)/documents/chats/$(chatId)).data.participants.hasAny([request.auth.uid]) || 
+           isAdmin());
+        
+        allow create, update: if isAuthenticated();
+      }
+    }
+    
+    match /admin_notifications/{notificationId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+    
+    match /wallet_addresses/{documentId} {
+      // ნებისმიერ ავტორიზებულ მომხმარებელს შეუძლია საფულის მისამართის დამატება
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      
+      // მომხმარებელს შეუძლია წაკითხვა საკუთარი მისამართების
+      allow read: if isAuthenticated() && 
+        (resource.data.userId == request.auth.uid || isAdmin());
+        
+      // განახლება და წაშლა მხოლოდ მფლობელს ან ადმინისტრატორს შეუძლია
+      allow update, delete: if isAuthenticated() && 
+        (resource.data.userId == request.auth.uid || isAdmin());
+    }
+    
+    // ყველა სხვა კოლექცია
+    match /{document=**} {
+      allow read, write: if isAdmin();
+    }
+  }
+}
