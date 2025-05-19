@@ -27,7 +27,6 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
   const [isSubmittingWallet, setIsSubmittingWallet] = useState<boolean>(false);
   const [isWalletSubmitted, setIsWalletSubmitted] = useState<boolean>(false);
   const [paymentCompleted, setPaymentCompleted] = useState<boolean>(false);
-  const [isDropdownOpen, setIsDropdownOpen] = useState<boolean>(false);
 
   // Fetch chat data and messages
   useEffect(() => {
@@ -413,46 +412,34 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
               <div className="mb-2 text-sm font-semibold text-gray-700">
                 Please select payment method:
               </div>
-              <div className="relative">
+              <div className="flex gap-2">
                 <button
-                  onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                  className="w-full flex justify-between items-center px-4 py-2 rounded-lg text-sm font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 transition-all"
+                  onClick={() => setWalletAddress('bitcoin')}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                    walletAddress === 'bitcoin' 
+                      ? 'bg-blue-600 text-white' 
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
                 >
-                  <span>{walletAddress ? (walletAddress === 'card' ? 'Visa/Mastercard' : 'Bitcoin') : 'Select payment method'}</span>
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4 ml-2">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-                  </svg>
+                  Bitcoin
                 </button>
-                
-                {isDropdownOpen && (
-                  <div className="absolute w-full mt-1 bg-white rounded-lg shadow-lg border border-gray-200 z-10">
                 <button
-                      onClick={() => {
-                        setWalletAddress('card');
-                        setIsDropdownOpen(false);
-                      }}
-                      className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 first:rounded-t-lg"
+                  onClick={() => setWalletAddress('card')}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                    walletAddress === 'card' 
+                      ? 'bg-blue-600 text-white' 
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
                 >
-                      Visa/Mastercard
+                  Card
                 </button>
-                    <button
-                      onClick={() => {
-                        setWalletAddress('bitcoin');
-                        setIsDropdownOpen(false);
-                      }}
-                      className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 last:rounded-b-lg"
-                    >
-                      Bitcoin
-                    </button>
-                  </div>
-                )}
                 <button
                   onClick={handleSubmitWalletAddress}
                   disabled={!walletAddress || isSubmittingWallet}
-                  className="mt-3 w-full bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-green-700 transition-all"
+                  className="ml-auto bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-green-700 transition-all"
                 >
                   {isSubmittingWallet ? (
-                    <div className="flex items-center justify-center">
+                    <div className="flex items-center">
                       <div className="animate-spin h-4 w-4 mr-2 border-2 border-white border-t-transparent rounded-full"></div>
                       <span>Processing...</span>
                     </div>
@@ -602,46 +589,34 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
               <div className="mb-2 text-sm font-semibold text-gray-700">
                 Please select payment method:
               </div>
-              <div className="relative">
+              <div className="flex gap-2">
                 <button
-                  onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                  className="w-full flex justify-between items-center px-4 py-2 rounded-lg text-sm font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 transition-all"
+                  onClick={() => setWalletAddress('bitcoin')}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                    walletAddress === 'bitcoin' 
+                      ? 'bg-blue-600 text-white' 
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
                 >
-                  <span>{walletAddress ? (walletAddress === 'card' ? 'Visa/Mastercard' : 'Bitcoin') : 'Select payment method'}</span>
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4 ml-2">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-                  </svg>
+                  Bitcoin
                 </button>
-                
-                {isDropdownOpen && (
-                  <div className="absolute w-full mt-1 bg-white rounded-lg shadow-lg border border-gray-200 z-10">
                 <button
-                      onClick={() => {
-                        setWalletAddress('card');
-                        setIsDropdownOpen(false);
-                      }}
-                      className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 first:rounded-t-lg"
+                  onClick={() => setWalletAddress('card')}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                    walletAddress === 'card' 
+                      ? 'bg-blue-600 text-white' 
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
                 >
-                      Visa/Mastercard
+                  Card
                 </button>
-                    <button
-                      onClick={() => {
-                        setWalletAddress('bitcoin');
-                        setIsDropdownOpen(false);
-                      }}
-                      className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 last:rounded-b-lg"
-                    >
-                      Bitcoin
-                    </button>
-                  </div>
-                )}
                 <button
                   onClick={handleSubmitWalletAddress}
                   disabled={!walletAddress || isSubmittingWallet}
-                  className="mt-3 w-full bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-green-700 transition-all"
+                  className="ml-auto bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-green-700 transition-all"
                 >
                   {isSubmittingWallet ? (
-                    <div className="flex items-center justify-center">
+                    <div className="flex items-center">
                       <div className="animate-spin h-4 w-4 mr-2 border-2 border-white border-t-transparent rounded-full"></div>
                       <span>Processing...</span>
                     </div>
