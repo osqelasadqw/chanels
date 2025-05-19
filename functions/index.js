@@ -5,7 +5,7 @@ admin.initializeApp();                           // ✅ ინიციალი
 require("dotenv").config();                      // ✅ ეს სწორად გაქვს
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY); // ✅
 const cors = require('cors')({ 
-  origin: ['http://localhost:3000', 'https://channel-market.vercel.app'],
+  origin: ['http://localhost:3000', 'https://channel-market.vercel.app', 'https://chanels-vy5f.vercel.app'],
   credentials: true
 });  // CORS მხარდაჭერა ლოკალჰოსტისთვის
 

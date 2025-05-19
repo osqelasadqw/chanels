@@ -850,6 +850,7 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
       }
     }, [paymentConfirmationExists]);
     
+
     if (!chatData?.productId || !paymentCompleted || paymentConfirmationExists) {
       return null; // არ ვაჩვენოთ თუ ეს არ არის პროდუქტის ჩატი, ან გადახდა არ არის დასრულებული, ან უკვე არის დადასტურების შეტყობინება
     }
