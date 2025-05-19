@@ -100,7 +100,7 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
           console.log("Payment confirmation message found:", paymentConfirmationMessage);
           
           // ასევე შეიძლება ვცადოთ Firestore-ში ვეძებოთ გადახდის სტატუსი თუ რეალურ დროში არ მოგვაქვს
-          // ეს საშუალებას გვაძლევს დავინახოთ გადახდის სტატუსის ცვლილებები მყისიერად
+          // ეს საშუალებას გვაძლევს დავინახოთ გადახდის სტატუსის ცვლილები მყისიერად
           fetchChatData();
         }
       } else {
@@ -850,37 +850,24 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
       }
     }, [paymentConfirmationExists]);
     
-    if (!chatData?.productId) {
-      return null; // არ ვაჩვენოთ თუ ეს არ არის პროდუქტის ჩატი
+    if (!chatData?.productId || !paymentCompleted || paymentConfirmationExists) {
+      return null; // არ ვაჩვენოთ თუ ეს არ არის პროდუქტის ჩატი, ან გადახდა არ არის დასრულებული, ან უკვე არის დადასტურების შეტყობინება
     }
-
-    // თუ უკვე არსებობს გადახდის დადასტურების შეტყობინება ჩატში, ვჩქმალავთ დამატებით შეტყობინებას
-    if (paymentConfirmationExists) {
-      return null;
-    }
-
-    const beforePaymentMessage = "To proceed, one of the parties must first pay the escrow transaction fee.\nThe terms of the transaction have been confirmed, but messaging and escrow support will only be enabled after payment.\nOnce the fee is paid, the seller will be required to deliver the account as agreed. If needed, you'll be able to request help from the escrow agent.";
     
     const afterPaymentMessage = "✅ Payment confirmed.\nThe seller has been notified and is now required to provide the agreed login details.\nIf the seller fails to deliver or violates the terms, you can request assistance from the escrow agent using the button below.";
     
     return (
       <div className="mb-6 p-4 rounded-lg border bg-blue-50 border-blue-100">
         <div className="flex items-center mb-2">
-          {paymentCompleted ? (
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6 text-green-600 mr-2">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          ) : (
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6 text-blue-600 mr-2">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
-            </svg>
-          )}
-          <h3 className={`font-semibold ${paymentCompleted ? "text-green-800" : "text-blue-800"}`}>
-            {paymentCompleted ? "Payment Status: Confirmed" : "Payment Status: Pending"}
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6 text-green-600 mr-2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <h3 className="font-semibold text-green-800">
+            Payment Status: Confirmed
           </h3>
         </div>
-        <p className={`whitespace-pre-wrap text-sm ${paymentCompleted ? "text-green-700" : "text-blue-700"}`}>
-          {paymentCompleted ? afterPaymentMessage : beforePaymentMessage}
+        <p className="whitespace-pre-wrap text-sm text-green-700">
+          {afterPaymentMessage}
         </p>
       </div>
     );
