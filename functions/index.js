@@ -4,10 +4,15 @@ admin.initializeApp();                           // ✅ ინიციალი
 
 require("dotenv").config();                      // ✅ ეს სწორად გაქვს
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY); // ✅
-const cors = require('cors')({ 
+const express = require('express'); // <--- დავამატოთ express
+const cors = require('cors'); // <--- შევცვალოთ cors-ის იმპორტი
+
+// CORS კონფიგურაცია
+const corsOptions = {
   origin: ['http://localhost:3000', 'https://channel-market.vercel.app', 'https://chanels-vy5f.vercel.app'],
-  credentials: true
-});  // CORS მხარდაჭერა ლოკალჰოსტისთვის
+  credentials: true,
+  optionsSuccessStatus: 200 // ზოგიერთი ძველი ბრაუზერი (IE11, various SmartTVs) ჭედავს 204-ზე
+};
 
 // დავამატოთ ფუნქცია, რომელიც დაგვიბრუნებს ბაზის URL-ს
 const getBaseUrl = () => {
@@ -173,103 +178,125 @@ exports.createPaymentSession = functions.https.onCall(async (data, context) => {
   return { url: session.url };
 });
 
+// HTTP ფუნქციისთვის Express აპლიკაციის შექმნა
+const httpApp = express();
+
+// CORS მიდლვეარის გამოყენება ყველა /createPaymentSessionHttp მარშრუტისთვის
+httpApp.use(cors(corsOptions));
+// Body parser JSON-ისთვის (თუ req.body-ს იყენებთ JSON-ის მისაღებად)
+httpApp.use(express.json());
+
 // დამატებით ვქმნით HTTP ვერსიას იმავე ფუნქციის, რომელიც მკაფიოდ მართავს CORS-ს
-exports.createPaymentSessionHttp = functions.https.onRequest((req, res) => {
-  cors(req, res, async () => {
-    try {
-      // აუთენტიფიკაციის შემოწმება
-      if (!req.headers.authorization || !req.headers.authorization.startsWith('Bearer ')) {
-        console.error('Unauthorized request: Missing or invalid authorization header');
-        res.status(403).send({ error: 'Unauthorized' });
-        return;
-      }
-
-      // ლოგი HTTP მოთხოვნის შესახებ
-      console.log(`HTTP request headers:`, req.headers);
-      console.log(`HTTP request body:`, req.body);
-      console.log(`HTTP request origin:`, req.headers.origin || req.headers.referer || 'Unknown');
-      
-      // დავამატოთ ახალი URL-ის განსაზღვრის ლოგიკა
-      let baseUrl;
-      
-      // ვცადოთ მივიღოთ origin მოთხოვნიდან
-      if (req.body.origin) {
-        baseUrl = req.body.origin;
-        console.log(`Using origin from request body: ${baseUrl}`);
-      } else if (req.headers.origin) {
-        baseUrl = req.headers.origin;
-        console.log(`Using origin from headers: ${baseUrl}`);
-      } else if (req.headers.referer) {
-        // თუ origin არ არის, ვცადოთ referer
-        const url = new URL(req.headers.referer);
-        baseUrl = `${url.protocol}//${url.host}`;
-        console.log(`Using referer as origin: ${baseUrl}`);
-      } else {
-        // თუ ვერცერთი ვერ ვიპოვეთ, გამოვიყენოთ ჩვენი ფუნქცია
-        baseUrl = getBaseUrl();
-        console.log(`Using default base URL: ${baseUrl}`);
-      }
-
-      // ვალიდაცია და ლოგიკა
-      const chatId = req.body.chatId;
-      if (!chatId) {
-        console.error('Missing chatId in request body');
-        res.status(400).send({ error: 'chatId is required' });
-        return;
-      }
-      
-      // გამოვითვალოთ საკომისიო თანხა
-      const feeAmount = await calculateFeeAmount(chatId);
-      
-      if (!feeAmount) {
-        console.error('Failed to calculate fee for chat:', chatId);
-        res.status(500).send({ error: 'Failed to calculate fee amount' });
-        return;
-      }
-
-      // წარმატებისა და გაუქმების URL-ები - უნდა დავბრუნდეთ იმავე ჩატში
-      const successUrl = `${baseUrl}/my-chats?chatId=${chatId}&payment=success`;
-      const cancelUrl = `${baseUrl}/my-chats?chatId=${chatId}&payment=cancelled`;
-      
-      console.log(`HTTP handler using base URL: ${baseUrl}`);
-      console.log(`Setting success URL to: ${successUrl}`);
-      console.log(`Fee amount: ${feeAmount} cents`);
-      
-      const session = await stripe.checkout.sessions.create({
-        payment_method_types: ["card"],
-        mode: "payment",
-        line_items: [{
-          price_data: {
-            currency: "usd",
-            unit_amount: feeAmount,
-            product_data: {
-              name: "Escrow Transaction Fee",
-            },
-          },
-          quantity: 1,
-        }],
-        success_url: successUrl,
-        cancel_url: cancelUrl,
-        metadata: {
-          chatId,
-          paidBy: req.body.userId,
-        },
-      });
-
-      // შევინახოთ სესიის ID ჩატის დოკუმენტში
-      const chatRef = admin.firestore().collection("chats").doc(chatId);
-      await chatRef.update({
-        paymentSessionId: session.id,
-        paymentSessionCreatedAt: Date.now(),
-      });
-
-      res.status(200).send({ url: session.url });
-    } catch (error) {
-      console.error('Error creating payment session:', error);
-      res.status(500).send({ error: error.message });
+httpApp.post('/createPaymentSessionHttp', async (req, res) => { // <--- შევცვალოთ route definition
+  try {
+    // აუთენტიფიკაციის შემოწმება
+    if (!req.headers.authorization || !req.headers.authorization.startsWith('Bearer ')) {
+      console.error('Unauthorized request: Missing or invalid authorization header');
+      res.status(403).send({ error: 'Unauthorized' });
+      return;
     }
-  });
+
+    // ლოგი HTTP მოთხოვნის შესახებ
+    console.log(`HTTP request headers:`, req.headers);
+    console.log(`HTTP request body:`, req.body);
+    console.log(`HTTP request origin:`, req.headers.origin || req.headers.referer || 'Unknown');
+    
+    // დავამატოთ ახალი URL-ის განსაზღვრის ლოგიკა
+    let baseUrl;
+    
+    // ვცადოთ მივიღოთ origin მოთხოვნიდან
+    if (req.body.origin) {
+      baseUrl = req.body.origin;
+      console.log(`Using origin from request body: ${baseUrl}`);
+    } else if (req.headers.origin) {
+      baseUrl = req.headers.origin;
+      console.log(`Using origin from headers: ${baseUrl}`);
+    } else if (req.headers.referer) {
+      // თუ origin არ არის, ვცადოთ referer
+      const refererUrl = new URL(req.headers.referer); // <--- შევცვალე ცვლადის სახელი
+      baseUrl = `${refererUrl.protocol}//${refererUrl.host}`;
+      console.log(`Using referer as origin: ${baseUrl}`);
+    } else {
+      // თუ ვერცერთი ვერ ვიპოვეთ, გამოვიყენოთ ჩვენი ფუნქცია
+      baseUrl = getBaseUrl();
+      console.log(`Using default base URL: ${baseUrl}`);
+    }
+
+    // ვალიდაცია და ლოგიკა
+    const chatId = req.body.chatId;
+    const userId = req.body.userId; // <--- დავამატოთ userId-ის მიღება req.body-დან
+
+    if (!chatId) {
+      console.error('Missing chatId in request body');
+      res.status(400).send({ error: 'chatId is required' });
+      return;
+    }
+     if (!userId) { // <--- დავამატოთ userId-ის შემოწმება
+      console.error('Missing userId in request body');
+      res.status(400).send({ error: 'userId is required' });
+      return;
+    }
+    
+    // გამოვითვალოთ საკომისიო თანხა
+    const feeAmount = await calculateFeeAmount(chatId);
+    
+    if (!feeAmount) {
+      console.error('Failed to calculate fee for chat:', chatId);
+      res.status(500).send({ error: 'Failed to calculate fee amount' });
+      return;
+    }
+
+    // წარმატებისა და გაუქმების URL-ები - უნდა დავბრუნდეთ იმავე ჩატში
+    const successUrl = `${baseUrl}/my-chats?chatId=${chatId}&payment=success&sessionId={CHECKOUT_SESSION_ID}`; // <--- დავამატე sessionId
+    const cancelUrl = `${baseUrl}/my-chats?chatId=${chatId}&payment=cancelled`;
+    
+    console.log(`HTTP handler using base URL: ${baseUrl}`);
+    console.log(`Setting success URL to: ${successUrl}`);
+    console.log(`Fee amount: ${feeAmount} cents`);
+    
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ["card"],
+      mode: "payment",
+      line_items: [{
+        price_data: {
+          currency: "usd",
+          unit_amount: feeAmount,
+          product_data: {
+            name: "Escrow Transaction Fee",
+          },
+        },
+        quantity: 1,
+      }],
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      metadata: {
+        chatId,
+        paidBy: userId, // <--- შევცვალოთ req.body.userId-ზე
+      },
+    });
+
+    // შევინახოთ სესიის ID ჩატის დოკუმენტში
+    const chatRef = admin.firestore().collection("chats").doc(chatId);
+    await chatRef.update({
+      paymentSessionId: session.id,
+      paymentSessionCreatedAt: Date.now(),
+    });
+
+    res.status(200).send({ url: session.url });
+  } catch (error) {
+    console.error('Error creating payment session:', error);
+    // შეცდომის უფრო დეტალური ლოგირება
+    if (error.type === 'StripeCardError') {
+      console.error('StripeCardError:', error.message);
+    } else if (error.type === 'StripeInvalidRequestError') {
+      console.error('StripeInvalidRequestError:', error.message);
+    } // ... დაამატეთ სხვა Stripe შეცდომის ტიპები საჭიროებისამებრ
+    res.status(500).send({ error: error.message, type: error.type || 'UnknownError' });
+  }
 });
+
+// HTTP ფუნქციის ექსპორტი
+exports.createPaymentSessionHttp = functions.https.onRequest(httpApp);
 
 // Stripe webhook ფუნქცია გადახდის დასასრულებლად
 exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
@@ -326,14 +353,12 @@ exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
           paymentCompleted: true,
           paymentCompletedAt: Date.now(),
           paymentStatus: 'completed',
-          paymentId: session.payment_intent || session.id
+          paymentId: session.payment_intent || session.id,
+          stripeCustomerId: session.customer, // <--- დავამატოთ მომხმარებლის ID
+          stripePaymentIntentId: session.payment_intent, // <--- დავამატოთ გადახდის ინტენტის ID
         });
         
         // დავაშლელოთ გადახდამდე და გადახდის შემდგომი შეტყობინებები
-        const beforePaymentMessage = "To proceed, one of the parties must first pay the escrow transaction fee.\n" +
-          "The terms of the transaction have been confirmed, but messaging and escrow support will only be enabled after payment.\n" +
-          "Once the fee is paid, the seller will be required to deliver the account as agreed. If needed, you'll be able to request help from the escrow agent.";
-
         const afterPaymentMessage = "✅ Payment confirmed.\n" +
           "The seller has been notified and is now required to provide the agreed login details.\n" +
           "If the seller fails to deliver or violates the terms, you can request assistance from the escrow agent using the button below.";
@@ -355,35 +380,39 @@ exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
           chatId,
           productId: chatData.productId,
           productName: chatData.productName || "Unknown Product",
-          buyerId: paidBy,
+          buyerId: paidBy, // ეს უნდა იყოს Firebase user ID
           paymentSessionId: session.id,
-          paymentAmount: session.amount_total,
+          paymentAmount: session.amount_total, // თანხა ცენტებში
           createdAt: Date.now(),
           read: false,
           priority: 'high',
           needsAction: true,
-          status: 'new'
+          status: 'new',
+          stripeCustomerId: session.customer,
+          stripePaymentIntentId: session.payment_intent,
         });
         
         // აგრეთვე ვაგზავნით რეალურ დროში მონაცემებს, რომ ადმინის ინტერფეისი დაუყოვნებლივ განახლდეს
-        const adminNotificationsRef = admin.database().ref('adminNotifications');
-        await adminNotificationsRef.push({
+        const adminNotificationsRtdbRef = admin.database().ref('adminNotifications'); // <--- შევცვალე სახელი rtdb ref-ისთვის
+        await adminNotificationsRtdbRef.push({
           type: 'payment_completed',
           chatId,
           productName: chatData.productName || "Unknown Product",
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          buyerId: paidBy,
+          paymentAmount: session.amount_total,
         });
         
-        console.log(`Payment for chat ${chatId} completed successfully`);
+        console.log(`Payment for chat ${chatId} completed successfully. Session ID: ${session.id}, Payment Intent ID: ${session.payment_intent}`);
         return res.status(200).send({ received: true });
         
       } catch (err) {
-        console.error('Error processing successful payment webhook:', err);
+        console.error(`Error processing successful payment webhook for session ${session.id}:`, err);
         return res.status(500).send({ error: err.message });
       }
+    } else {
+      console.log(`Unhandled Stripe event type: ${event.type}`);
     }
-    
-    // სხვა მოვლენების დამუშავება შეგვიძლია აქ დავამატოთ
     
     return res.status(200).send({ received: true });
     
