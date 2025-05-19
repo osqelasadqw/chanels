@@ -630,27 +630,27 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
             <div className="lg:w-1/4 lg:relative">
               <div className="lg:absolute lg:top-80">
                 <h2 className="text-xl font-bold text-gray-800 mb-3 text-center">Attached images:</h2>
-                {product.imageUrls && product.imageUrls.length > 0 ? (
+              {product.imageUrls && product.imageUrls.length > 0 ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {product.imageUrls.map((url, index) => (
-                      <div 
-                        key={index} 
-                        className="aspect-square rounded-md overflow-hidden border border-gray-200 cursor-pointer hover:opacity-90 transition-opacity"
-                        onClick={() => setSelectedImage(url)}
-                      >
-                        <Image
-                          src={url}
-                          alt={`${product.displayName} - Image ${index + 1}`}
+                  {product.imageUrls.map((url, index) => (
+                    <div 
+                      key={index} 
+                      className="aspect-square rounded-md overflow-hidden border border-gray-200 cursor-pointer hover:opacity-90 transition-opacity"
+                      onClick={() => setSelectedImage(url)}
+                    >
+                      <Image
+                        src={url}
+                        alt={`${product.displayName} - Image ${index + 1}`}
                           width={160}
                           height={160}
-                          className="w-full h-full object-cover"
-                        />
-                      </div>
-                    ))}
-                  </div>
-                ) : (
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
                   <div className="text-gray-500 text-center py-6 text-sm">No images attached</div>
-                )}
+              )}
               </div>
             </div>
           </div>
