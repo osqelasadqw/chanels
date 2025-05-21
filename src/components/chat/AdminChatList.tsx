@@ -1,11 +1,21 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { ref, onValue, off, remove, set } from "firebase/database";
 import { doc, getDoc, updateDoc, collection, addDoc, query, where, onSnapshot, orderBy, getDocs, deleteDoc } from "firebase/firestore";
 import { db, rtdb } from "@/firebase/config";
+import Image from "next/image";
+
+// გაერთიანებული ინტერფეისი ყველა ნოტიფიკაციისთვის
+interface BaseNotification {
+  id: string;
+  chatId: string;
+  productId: string;
+  createdAt: number;
+  read: boolean;
+}
 
 interface AdminRequest {
   id: string;
@@ -16,11 +26,8 @@ interface AdminRequest {
   timestamp: number;
 }
 
-interface WalletNotification {
-  id: string;
-  type: string;
-  chatId: string;
-  productId: string;
+interface WalletNotification extends BaseNotification {
+  type: 'wallet_added';
   productName: string;
   transactionId: number;
   buyerName: string;
@@ -30,8 +37,25 @@ interface WalletNotification {
   paymentMethod: string;
   amount: number;
   walletAddress: string;
+}
+
+// გადახდის ჩანაწერის ინტერფეისი paid კოლექციიდან
+interface PaidPayment {
+  id: string;
+  chatId: string;
+  userId: string;
+  productId: string;
+  paymentSessionId: string;
+  amount: number;
+  status: string;
+  paymentMethod: string;
+  currency: string;
   createdAt: number;
-  read: boolean;
+  stripeSessionId: string;
+  buyerName: string;
+  sellerId: string;
+  sellerName: string;
+  chatName: string;
 }
 
 // გადახდის შეტყობინების ინტერფეისი
@@ -42,6 +66,7 @@ interface PaymentNotification {
   productId: string;
   productName: string;
   buyerId: string;
+  buyerName: string; // დავამატოთ buyerName ველი
   paymentSessionId: string;
   paymentAmount: number;
   createdAt: number;
@@ -51,10 +76,25 @@ interface PaymentNotification {
   status: string;
 }
 
-export default function AdminChatList() {
+interface AdminChatListProps {
+  userPhoto?: string;
+  userName?: string;
+  onOpenProductsModal: () => void;
+  onOpenEscrowChats: () => void;
+  profilePhotoUploader: ReactNode;
+}
+
+export default function AdminChatList({
+  userPhoto,
+  userName = "ადმინისტრატორი",
+  onOpenProductsModal,
+  onOpenEscrowChats,
+  profilePhotoUploader
+}: AdminChatListProps) {
   const [requests, setRequests] = useState<AdminRequest[]>([]);
   const [walletNotifications, setWalletNotifications] = useState<WalletNotification[]>([]);
   const [paymentNotifications, setPaymentNotifications] = useState<PaymentNotification[]>([]);
+  const [paidPayments, setPaidPayments] = useState<PaidPayment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [processing, setProcessing] = useState<string | null>(null);
@@ -129,27 +169,30 @@ export default function AdminChatList() {
       }
     );
 
-    // გადახდის შეტყობინებების მიღება
-    const paymentNotificationsQuery = query(
-      walletNotificationsRef,
-      where("type", "==", "payment_completed")
+    // მივიღოთ გადახდის ჩანაწერები paid კოლექციიდან
+    const paidPaymentsRef = collection(db, "paid");
+    const paidPaymentsQuery = query(
+      paidPaymentsRef,
+      orderBy("createdAt", "desc")
     );
     
-    const unsubscribePaymentNotifications = onSnapshot(
-      paymentNotificationsQuery,
-      (snapshot) => {
-        const notificationsList: PaymentNotification[] = [];
+    const unsubscribePaidPayments = onSnapshot(
+      paidPaymentsQuery,
+      async (snapshot) => {
+        const paymentsList: PaidPayment[] = [];
+        
         snapshot.forEach((doc) => {
-          notificationsList.push({
+          paymentsList.push({
             id: doc.id,
             ...doc.data()
-          } as PaymentNotification);
+          } as PaidPayment);
         });
-        notificationsList.sort((a, b) => b.createdAt - a.createdAt);
-        setPaymentNotifications(notificationsList);
+        
+        // დავააპდეითოთ ლოკალური პადპაიმენტს სტეიტი
+        setPaidPayments(paymentsList);
       },
       (error) => {
-        console.error("Error fetching payment notifications:", error);
+        console.error("Error fetching paid payments:", error);
       }
     );
     
@@ -169,7 +212,7 @@ export default function AdminChatList() {
       off(adminRequestsRef);
       off(adminNotificationsRef);
       unsubscribeWalletNotifications();
-      unsubscribePaymentNotifications();
+      unsubscribePaidPayments();
     };
   }, [user]);
 
@@ -257,6 +300,15 @@ export default function AdminChatList() {
 
       // Check if admin is already part of the chat participants
       const chatData = chatDoc.data();
+      
+      // დროის გამოთვლა ტაიმერისთვის
+      const currentDate = new Date();
+      const timerStartDate = currentDate.getTime();
+      
+      // 7 დღის შემდეგ (7 * 24 * 60 * 60 * 1000 = 604800000 მილიწამი)
+      const sevenDaysLater = new Date(currentDate.getTime() + 604800000);
+      const timerEndDate = sevenDaysLater.getTime();
+      
       if (!chatData.participants.includes(user.id)) {
         // Update the chat to add admin as a participant
         await updateDoc(chatDocRef, {
@@ -269,20 +321,18 @@ export default function AdminChatList() {
           participantPhotos: {
             ...chatData.participantPhotos,
             [user.id]: user.photoURL || ""
-          }
+          },
+          // ტაიმერის ინფორმაციის დამატება
+          timerActive: true,
+          timerStartDate: timerStartDate,
+          timerEndDate: timerEndDate
         });
-
-        // Send a system message to the chat
-        const messagesRef = ref(rtdb, `messages/${notification.chatId}`);
-        const messageKey = Date.now().toString();
-        const messageRef = ref(rtdb, `messages/${notification.chatId}/${messageKey}`);
-        
-        await set(messageRef, {
-          text: "The escrow agent has joined the chat to assist with the transaction.",
-          senderId: "system",
-          senderName: "System",
-          timestamp: Date.now(),
-          isSystem: true
+      } else if (!chatData.timerActive) {
+        // თუ ადმინი უკვე მონაწილეა, მაგრამ ტაიმერი არ არის გააქტიურებული
+        await updateDoc(chatDocRef, {
+          timerActive: true,
+          timerStartDate: timerStartDate,
+          timerEndDate: timerEndDate
         });
       }
 
@@ -346,6 +396,192 @@ export default function AdminChatList() {
     );
   });
 
+  // გადახდის შეტყობინების დამუშავება და ჩატში შესვლა
+  const handleJoinChatFromPayment = async (notification: PaymentNotification) => {
+    if (!user || !user.isAdmin) return;
+
+    try {
+      setProcessing(notification.id);
+
+      // Get chat data to verify it exists
+      const chatDocRef = doc(db, "chats", notification.chatId);
+      const chatDoc = await getDoc(chatDocRef);
+      
+      if (!chatDoc.exists()) {
+        throw new Error("Chat not found");
+      }
+
+      // Check if admin is already part of the chat participants
+      const chatData = chatDoc.data();
+      if (!chatData.participants.includes(user.id)) {
+        // Update the chat to add admin as a participant
+        await updateDoc(chatDocRef, {
+          adminJoined: true,
+          participants: [...chatData.participants, user.id],
+          participantNames: {
+            ...chatData.participantNames,
+            [user.id]: user.name
+          },
+          participantPhotos: {
+            ...chatData.participantPhotos,
+            [user.id]: user.photoURL || ""
+          }
+        });
+      }
+
+      // Mark notification as read
+      await updateDoc(doc(db, "admin_notifications", notification.id), {
+        read: true,
+        needsAction: false
+      });
+
+      // Log the chat ID we're navigating to
+      console.log('Navigating to chat from payment notification:', notification.chatId);
+      
+      // შევინახოთ ჩატის ID ლოკალურად
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('lastChatId', notification.chatId);
+      }
+      
+      // გამოვიყენოთ query პარამეტრი, Next.js-ის სტანდარტული მიდგომა
+      router.push(`/my-chats?chatId=${notification.chatId}`);
+    } catch (err) {
+      console.error("Error joining chat from payment notification:", err);
+      setError("Failed to join chat");
+      alert("ჩატში გადასვლა ვერ მოხერხდა, გთხოვთ სცადოთ მოგვიანებით");
+    } finally {
+      setProcessing(null);
+    }
+  };
+  
+  // გადახდის შეტყობინების წაშლა
+  const handleDeletePaymentNotification = async (notificationId: string) => {
+    if (!user || !user.isAdmin) return;
+
+    try {
+      setProcessing(notificationId);
+      
+      // სრულად წავშალოთ შეტყობინება Firestore-დან
+      await deleteDoc(doc(db, "admin_notifications", notificationId));
+      
+      // განვაახლოთ ლოკალური state-ი წაშლილი შეტყობინების მოსაშორებლად
+      setPaymentNotifications(prevNotifications => 
+        prevNotifications.filter(notification => notification.id !== notificationId)
+      );
+      
+    } catch (err) {
+      console.error("Error deleting payment notification:", err);
+      setError("შეცდომა გადახდის შეტყობინების წაშლისას");
+    } finally {
+      setProcessing(null);
+    }
+  };
+
+  // გადახდიდან ჩატში შესვლა
+  const handleJoinChatFromPaidPayment = async (payment: PaidPayment) => {
+    if (!user || !user.isAdmin) return;
+    
+    try {
+      setProcessing(payment.id);
+      
+      // Get chat data to verify it exists
+      const chatDocRef = doc(db, "chats", payment.chatId);
+      const chatDoc = await getDoc(chatDocRef);
+      
+      if (!chatDoc.exists()) {
+        throw new Error("Chat not found");
+      }
+      
+      // Get product name
+      const productDocRef = doc(db, "products", payment.productId);
+      const productDoc = await getDoc(productDocRef);
+      const productName = productDoc.exists() ? productDoc.data()?.displayName || "Unknown Product" : "Unknown Product";
+
+      // Get user name
+      const userDocRef = doc(db, "users", payment.userId);
+      const userDoc = await getDoc(userDocRef);
+      const userName = userDoc.exists() ? userDoc.data()?.name || "Unknown User" : "Unknown User";
+
+      // Check if admin is already part of the chat participants
+      const chatData = chatDoc.data();
+      
+      // დროის გამოთვლა ტაიმერისთვის
+      const currentDate = new Date();
+      const timerStartDate = currentDate.getTime();
+      
+      // 7 დღის შემდეგ (7 * 24 * 60 * 60 * 1000 = 604800000 მილიწამი)
+      const sevenDaysLater = new Date(currentDate.getTime() + 604800000);
+      const timerEndDate = sevenDaysLater.getTime();
+      
+      if (!chatData.participants.includes(user.id)) {
+        // Update the chat to add admin as a participant and დავიწყოთ 7-დღიანი ტაიმერი
+        await updateDoc(chatDocRef, {
+          adminJoined: true,
+          participants: [...chatData.participants, user.id],
+          participantNames: {
+            ...chatData.participantNames,
+            [user.id]: user.name
+          },
+          participantPhotos: {
+            ...chatData.participantPhotos,
+            [user.id]: user.photoURL || ""
+          },
+          // ტაიმერის ინფორმაციის დამატება
+          timerActive: true,
+          timerStartDate: timerStartDate,
+          timerEndDate: timerEndDate
+        });
+      } else if (!chatData.timerActive) {
+        // თუ ადმინი უკვე მონაწილეა, მაგრამ ტაიმერი არ არის გააქტიურებული
+        await updateDoc(chatDocRef, {
+          timerActive: true,
+          timerStartDate: timerStartDate,
+          timerEndDate: timerEndDate
+        });
+      }
+
+      // Log the chat ID we're navigating to
+      console.log('Navigating to chat from paid payment:', payment.chatId);
+      
+      // შევინახოთ ჩატის ID ლოკალურად
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('lastChatId', payment.chatId);
+      }
+      
+      // გამოვიყენოთ query პარამეტრი, Next.js-ის სტანდარტული მიდგომა
+      router.push(`/my-chats?chatId=${payment.chatId}`);
+    } catch (err) {
+      console.error("Error joining chat from paid payment:", err);
+      setError("Failed to join chat");
+      alert("ჩატში გადასვლა ვერ მოხერხდა, გთხოვთ სცადოთ მოგვიანებით");
+    } finally {
+      setProcessing(null);
+    }
+  };
+  
+  // გადახდის ჩანაწერის წაშლა
+  const handleDeletePaidPayment = async (paymentId: string) => {
+    if (!user || !user.isAdmin) return;
+    
+    try {
+      setProcessing(paymentId);
+      
+      // სრულად წავშალოთ ჩანაწერი Firestore-დან
+      await deleteDoc(doc(db, "paid", paymentId));
+      
+      // განვაახლოთ ლოკალური state
+      setPaidPayments(prevPayments => 
+        prevPayments.filter(payment => payment.id !== paymentId)
+      );
+      
+    } catch (err) {
+      console.error("Error deleting paid payment:", err);
+      setError("შეცდომა გადახდის ჩანაწერის წაშლისას");
+    } finally {
+      setProcessing(null);
+    }
+  };
+
   if (!user || !user.isAdmin) {
     return (
       <div className="bg-red-100 text-red-700 p-4 rounded-md">
@@ -370,17 +606,61 @@ export default function AdminChatList() {
     );
   }
 
-  if (requests.length === 0 && walletNotifications.length === 0 && paymentNotifications.length === 0) {
+  if (requests.length === 0 && walletNotifications.length === 0 && paidPayments.length === 0) {
     return (
-      <div className="text-center py-20 bg-gradient-to-br from-gray-50 to-gray-100 rounded-xl shadow-xl border border-gray-200">
-        <div className="relative w-24 h-24 mx-auto mb-4">
-          <div className="absolute inset-0 bg-indigo-50 rounded-full animate-pulse"></div>
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.2} stroke="currentColor" className="w-full h-full text-indigo-500 relative">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
+      <div className="p-6 sm:p-8 border-b bg-gradient-to-r from-gray-800 to-indigo-900 text-white rounded-t-xl">
+        <div className="flex flex-col sm:flex-row items-start justify-between">
+          <div className="flex items-center mb-4 sm:mb-0">
+            <div className="mr-3">
+              {userPhoto ? (
+                <Image
+                  src={userPhoto}
+                  alt={userName}
+                  width={48}
+                  height={48}
+                  className="rounded-full bg-white p-1 w-12 h-12 object-cover"
+                />
+              ) : (
+                <Image
+                  src="/agent.png"
+                  alt="Escrow Agent Logo"
+                  width={48}
+                  height={48}
+                  className="rounded-full bg-white p-1"
+                />
+              )}
+            </div>
+            <div>
+              <h1 className="text-xl font-bold text-white">Escrow Agent Dashboard</h1>
+              <p className="text-sm text-indigo-200">მართეთ ესქროუ სერვისები მაღალი უსაფრთხოებით</p>
+            </div>
+          </div>
+          
+          <div className="flex flex-wrap gap-2 sm:gap-3">
+            <button 
+              onClick={onOpenProductsModal}
+              className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-blue-500 transition-colors duration-150"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1.5" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 2a4 4 0 00-4 4v1H5a1 1 0 00-.994.89l-1 9A1 1 0 004 18h12a1 1 0 00.994-1.11l-1-9A1 1 0 0015 7h-1V6a4 4 0 00-4-4zm2 5V6a2 2 0 10-4 0v1h4zm-6 3a1 1 0 112 0 1 1 0 01-2 0zm7-1a1 1 0 100 2 1 1 0 000-2z" clipRule="evenodd" />
+              </svg>
+              პროდუქტების მართვა
+            </button>
+            
+            <button 
+              onClick={onOpenEscrowChats}
+              className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-indigo-500 transition-colors duration-150"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1.5" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M2 5a2 2 0 012-2h7a2 2 0 012 2v4a2 2 0 01-2 2H9l-3 3v-3H4a2 2 0 01-2-2V5z" />
+                <path d="M15 7v2a4 4 0 01-4 4H9.828l-1.766 1.767c.28.149.599.233.938.233h2l3 3v-3h2a2 2 0 002-2V9a2 2 0 00-2-2h-1z" />
+              </svg>
+              პირადი ჩატები
+            </button>
+            
+            {profilePhotoUploader}
+          </div>
         </div>
-        <h3 className="text-xl font-semibold text-gray-700 mb-2"></h3>
-        <p className="text-gray-500 max-w-md mx-auto font-medium">არ მოიძებნა ესქროუ სერვისების მოთხოვნები ამ მომენტისთვის</p>
       </div>
     );
   }
@@ -389,377 +669,312 @@ export default function AdminChatList() {
     <div className="bg-gradient-to-br from-white to-gray-50 rounded-xl shadow-xl border border-gray-200 overflow-hidden w-full">
       <div className="p-6 sm:p-8 border-b bg-gradient-to-r from-gray-800 to-indigo-900 text-white rounded-t-xl">
         <div className="flex flex-col sm:flex-row items-start justify-between">
-          <div className="mb-4 sm:mb-0">
-            <h2 className="text-xl sm:text-2xl font-bold">Escrow Agent Dashboard</h2>
-            <p className="mt-1 text-sm text-indigo-200 max-w-xl">
-              მართეთ ესქროუ სერვისები და მომხმარებლების მოთხოვნები მაღალი უსაფრთხოებით.
-            </p>
+          <div className="flex items-center mb-4 sm:mb-0">
+            <div className="mr-3">
+              {userPhoto ? (
+                <Image
+                  src={userPhoto}
+                  alt={userName}
+                  width={48}
+                  height={48}
+                  className="rounded-full bg-white p-1 w-12 h-12 object-cover"
+                />
+              ) : (
+                <Image
+                  src="/agent.png"
+                  alt="Escrow Agent Logo"
+                  width={48}
+                  height={48}
+                  className="rounded-full bg-white p-1"
+                />
+              )}
+            </div>
+            <div>
+              <h1 className="text-xl font-bold text-white">Escrow Agent Dashboard</h1>
+              <p className="text-sm text-indigo-200">მართეთ ესქროუ სერვისები მაღალი უსაფრთხოებით</p>
+            </div>
           </div>
-          <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2 w-full sm:w-auto">
+          
+          <div className="flex flex-wrap gap-2 sm:gap-3">
             <button 
-              onClick={handleOpenProductsModalEvent}
-              className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-blue-500 transition-colors duration-150 whitespace-nowrap"
+              onClick={onOpenProductsModal}
+              className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-blue-500 transition-colors duration-150"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1.5" viewBox="0 0 20 20" fill="currentColor">
-                <path d="M17.414 2.586a2 2 0 00-2.828 0L7 10.172V13h2.828l7.586-7.586a2 2 0 000-2.828z" />
-                <path fillRule="evenodd" d="M2 6a2 2 0 012-2h4a1 1 0 010 2H4v10h10v-4a1 1 0 112 0v4a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" clipRule="evenodd" />
+                <path fillRule="evenodd" d="M10 2a4 4 0 00-4 4v1H5a1 1 0 00-.994.89l-1 9A1 1 0 004 18h12a1 1 0 00.994-1.11l-1-9A1 1 0 0015 7h-1V6a4 4 0 00-4-4zm2 5V6a2 2 0 10-4 0v1h4zm-6 3a1 1 0 112 0 1 1 0 01-2 0zm7-1a1 1 0 100 2 1 1 0 000-2z" clipRule="evenodd" />
               </svg>
               პროდუქტების მართვა
             </button>
+            
             <button 
-              onClick={handleOpenEscrowChatsModalEvent}
-              className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-500 hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-green-500 transition-colors duration-150 whitespace-nowrap"
+              onClick={onOpenEscrowChats}
+              className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-indigo-500 transition-colors duration-150"
             >
-               <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6.8 3.11 2.19 4.024C6.07 18.332 7.5 19.5 9 19.5h6c1.5 0 2.93-1.168 3.99-2.715.32-.297.71-.53 1.13-.69M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75" />
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1.5" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M2 5a2 2 0 012-2h7a2 2 0 012 2v4a2 2 0 01-2 2H9l-3 3v-3H4a2 2 0 01-2-2V5z" />
+                <path d="M15 7v2a4 4 0 01-4 4H9.828l-1.766 1.767c.28.149.599.233.938.233h2l3 3v-3h2a2 2 0 002-2V9a2 2 0 00-2-2h-1z" />
               </svg>
-              პირადი ჩატები (Escrow)
+              პირადი ჩატები
             </button>
-            <div className="px-4 py-3 flex items-center gap-2 rounded-lg bg-indigo-800 bg-opacity-50 border border-indigo-700">
-              <span className="relative flex h-3 w-3">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-3 w-3 bg-indigo-500"></span>
-              </span>
-              <span className="text-sm font-medium text-indigo-100">ლაივ მონიტორინგი აქტიურია</span>
-            </div>
+            
+            {profilePhotoUploader}
           </div>
         </div>
       </div>
       
-      {walletNotifications.length > 0 && (
-        <div className="p-8 border-b relative overflow-hidden">
-          <div className="absolute -top-10 right-0 w-96 h-96 bg-green-50 rounded-full blur-3xl opacity-20"></div>
-          <div className="relative">
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="text-xl font-bold text-gray-800 flex items-center gap-3">
-                <div className="p-2 rounded-full bg-gradient-to-br from-emerald-500 to-green-600 text-white shadow-lg shadow-green-200">
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a2.25 2.25 0 00-2.25-2.25H15a3 3 0 11-6 0H5.25A2.25 2.25 0 003 12m18 0v6a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 18v-6m18 0V9M3 12V9m18 0a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 9m18 0V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v3" />
+      <div className="p-6">
+        {/* თუ გვაქვს ესქროუ მოთხოვნები */}
+        {/* საფულის მისამართები */}
+        {paidPayments.length > 0 && (
+          <div className="mb-8">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center">
+                <span className="bg-green-100 rounded-full p-2 flex items-center justify-center mr-2">
+                  <svg className="h-5 w-5 text-green-600" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M4 4a2 2 0 00-2 2v1h16V6a2 2 0 00-2-2H4z" />
+                    <path fillRule="evenodd" d="M18 9H2v5a2 2 0 002 2h12a2 2 0 002-2V9zM4 13a1 1 0 011-1h1a1 1 0 110 2H5a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2H9z" clipRule="evenodd" />
+                  </svg>
+                </span>
+                <h3 className="text-lg font-semibold">საფულის მისამართები <span className="bg-green-100 text-green-800 text-xs font-medium px-2 py-0.5 rounded-full ml-2">{paidPayments.length}</span></h3>
+              </div>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                  <svg className="w-4 h-4 text-gray-500" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 20 20">
+                    <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m19 19-4-4m0-7A7 7 0 1 1 1 8a7 7 0 0 1 14 0Z"/>
                   </svg>
                 </div>
-                საფულის მისამართები
-                <span className="ml-2 px-3 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800 border border-green-200">
-                  {walletNotifications.length}
-                </span>
-              </h3>
-              <div className="relative">
-                <input
-                  type="text"
+                <input 
+                  type="text" 
+                  placeholder="ძებნა..." 
+                  className="block w-full p-2 pl-10 text-sm text-gray-900 border border-gray-300 rounded-lg bg-white focus:ring-blue-500 focus:border-blue-500" 
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="ძებნა..."
-                  className="px-4 py-2 pl-10 text-sm border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 outline-none shadow-sm"
                 />
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-5 w-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                  />
-                </svg>
               </div>
             </div>
-            <div className="overflow-hidden rounded-xl border border-gray-200 shadow-lg">
-              <div className="overflow-x-auto overflow-y-auto max-h-[60vh]" style={{ scrollbarWidth: 'thin', scrollbarColor: '#d1d5db #f3f4f6' }}>
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead>
-                    <tr className="bg-gradient-to-r from-emerald-700 to-green-600">
-                      <th scope="col" className="px-6 py-4 text-left text-xs font-semibold text-white uppercase tracking-wider">
-                        არხის სახელი / ფასი
-                      </th>
-                      <th scope="col" className="px-6 py-4 text-left text-xs font-semibold text-white uppercase tracking-wider">
-                        მყიდველი / გამყიდველი
-                      </th>
-                      <th scope="col" className="px-6 py-4 text-left text-xs font-semibold text-white uppercase tracking-wider">
-                        საფულის მისამართი
-                      </th>
-                      <th scope="col" className="px-6 py-4 text-left text-xs font-semibold text-white uppercase tracking-wider">
-                        ტრანზაქცია
-                      </th>
-                      <th scope="col" className="px-6 py-4 text-left text-xs font-semibold text-white uppercase tracking-wider">
-                        თარიღი
-                      </th>
-                      <th scope="col" className="px-6 py-4 text-center text-xs font-semibold text-white uppercase tracking-wider">
-                        მოქმედება
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
-                    {filteredNotifications.map((notification, idx) => (
-                      <tr key={notification.id} 
-                          className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} 
-                          style={{transition: 'all 0.2s'}}
-                          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f0fdf4'}
-                          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = idx % 2 === 0 ? '#ffffff' : '#f9fafb'}>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="flex items-center">
-                            <div className="flex-shrink-0 h-10 w-10 rounded-lg bg-green-100 flex items-center justify-center shadow-sm">
-                              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 text-green-600">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 21v-7.5a.75.75 0 01.75-.75h3a.75.75 0 01.75.75V21m-4.5 0H2.36m11.14 0H18m0 0h3.64m-1.39 0V9.349m-16.5 11.65V9.35m0 0a3.001 3.001 0 003.75-.615A2.993 2.993 0 009.75 9.75c.896 0 1.7-.393 2.25-1.016a2.993 2.993 0 002.25 1.016c.896 0 1.7-.393 2.25-1.016a3.001 3.001 0 003.75.614m-16.5 0a3.004 3.004 0 01-.621-4.72L4.318 3.44A1.5 1.5 0 015.378 3h13.243a1.5 1.5 0 011.06.44l1.19 1.189a3 3 0 01-.621 4.72m-13.5 8.65h3.75a.75.75 0 00.75-.75V13.5a.75.75 0 00-.75-.75H6.75a.75.75 0 00-.75.75v3.75c0 .415.336.75.75.75z" />
-                              </svg>
-                            </div>
-                            <div className="ml-4">
-                              <div className="text-sm font-medium text-gray-900 truncate max-w-[120px]">
-                                {notification.productName}
-                              </div>
-                              <div className="text-xs text-gray-500 font-bold bg-gray-100 rounded-full px-2 py-0.5 inline-block mt-1">
-                                ${notification.amount}
-                              </div>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="flex space-x-6">
-                            <div className="flex flex-col">
-                              <div className="text-xs text-gray-900 flex items-center gap-1">
-                                <div className="p-1 rounded-full bg-blue-100 mr-1">
-                                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3 text-blue-600">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
-                                  </svg>
-                                </div>
-                                <span className="font-semibold text-blue-600">მყიდველი:</span>
-                              </div>
-                              <div className="text-xs text-gray-700 ml-6">{notification.buyerName}</div>
-                            </div>
-                            <div className="flex flex-col">
-                              <div className="text-xs text-gray-900 flex items-center gap-1">
-                                <div className="p-1 rounded-full bg-indigo-100 mr-1">
-                                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3 text-indigo-600">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
-                                  </svg>
-                                </div>
-                                <span className="font-semibold text-indigo-600">გამყიდველი:</span>
-                              </div>
-                              <div className="text-xs text-gray-700 ml-6">{notification.sellerName}</div>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="flex items-center">
-                            <div className="flex-shrink-0 h-10 w-10 rounded-lg bg-amber-100 flex items-center justify-center shadow-sm">
-                              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 text-amber-600">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a2.25 2.25 0 00-2.25-2.25H15a3 3 0 11-6 0H5.25A2.25 2.25 0 003 12m18 0v6a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 18v-6m18 0V9M3 12V9m18 0a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 9m18 0V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v3" />
-                              </svg>
-                            </div>
-                            <div className="ml-4">
-                              <div className="relative text-xs bg-gray-800 text-white py-1.5 px-3 rounded-md font-mono max-w-[180px] overflow-hidden text-ellipsis">
-                                {notification.walletAddress}
-                                <button 
-                                  onClick={() => navigator.clipboard.writeText(notification.walletAddress)}
-                                  className="absolute right-1 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-white transition-colors p-1 rounded">
-                                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75" />
-                                  </svg>
-                                </button>
-                              </div>
-                              <div className="text-xs font-medium text-gray-500 flex items-center gap-1 mt-1.5">
-                                <span className="px-2 py-1 text-xs font-medium rounded-md bg-gradient-to-r from-gray-100 to-gray-200 text-gray-800 border border-gray-200 shadow-sm">
-                                  {notification.paymentMethod === 'stripe' ? 'Stripe' : 'Bitcoin'}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="text-xs font-semibold text-gray-900 flex items-center gap-1">
-                            <span className="px-3 py-1.5 text-xs font-medium rounded-md bg-gradient-to-r from-purple-100 to-indigo-100 text-purple-800 border border-purple-200 shadow-sm">
-                              ID: {notification.transactionId}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-xs text-gray-500">
-                          <div className="flex items-center bg-gray-50 px-3 py-2 rounded-lg border border-gray-200">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4 text-gray-500 mr-1.5">
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-                            </svg>
-                            {new Date(notification.createdAt).toLocaleString()}
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-center">
-                          <div className="flex space-x-2 justify-center">
-                            <button 
-                              onClick={() => handleJoinChatFromNotification(notification)}
-                              className="inline-flex items-center justify-center px-3 py-1.5 text-sm font-medium rounded-lg 
-                                      bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-sm
-                                      hover:from-emerald-700 hover:to-green-700 focus:outline-none focus:ring-1">
-                              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4 mr-1">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6.8 3.11 2.19 4.024C6.07 18.332 7.5 19.5 9 19.5h6c1.5 0 2.93-1.168 3.99-2.715.32-.297.71-.53 1.13-.69M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75" />
-                              </svg>
-                              ჩათი
-                            </button>
-                            <button 
-                              onClick={() => handleShowDetails(notification)}
-                              className="inline-flex items-center justify-center px-3 py-1.5 text-sm font-medium rounded-lg 
-                                      bg-gradient-to-r from-gray-500 to-gray-600 text-white shadow-sm
-                                      hover:from-gray-600 hover:to-gray-700 focus:outline-none focus:ring-1">
-                              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4 mr-1">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
-                              </svg>
-                              დეტალები
-                            </button>
-                            {deleteConfirmation === notification.id ? (
-                              <div className="flex space-x-1">
-                                <button
-                                  onClick={() => handleDeleteNotification(notification.id)}
-                                  disabled={processing === notification.id}
-                                  className="inline-flex items-center justify-center px-3 py-1.5 text-sm font-medium rounded-lg bg-red-600 text-white shadow-sm hover:bg-red-700 focus:outline-none focus:ring-1">
-                                  {processing === notification.id ? (
-                                    <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                    </svg>
-                                  ) : (
-                                    <>
-                                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4 mr-1">
-                                        <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                                      </svg>
-                                      დიახ
-                                    </>
-                                  )}
-                                </button>
-                                <button 
-                                  onClick={() => setDeleteConfirmation(null)}
-                                  className="inline-flex items-center justify-center px-3 py-1.5 text-sm font-medium rounded-lg bg-gray-400 text-white shadow-sm hover:bg-gray-500 focus:outline-none focus:ring-1">
-                                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4 mr-1">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                                  </svg>
-                                  არა
-                                </button>
-                              </div>
-                            ) : (
-                              <button
-                                onClick={() => setDeleteConfirmation(notification.id)}
-                                className="inline-flex items-center justify-center px-3 py-1.5 text-sm font-medium rounded-lg bg-red-100 text-red-700 shadow-sm hover:bg-red-200 focus:outline-none focus:ring-1">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4 mr-1">
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+
+            <div className="w-full overflow-hidden border rounded-lg">
+              <div className="overflow-x-auto">
+                <div className="max-h-[50vh] sm:max-h-[60vh] md:max-h-[70vh] lg:max-h-[75vh] overflow-y-auto">
+                  <table className="w-full border-collapse">
+                    <thead className="bg-green-600 text-white sticky top-0 z-10">
+                      <tr>
+                        <th className="px-4 py-2 text-left border-r border-green-500">ჯამი სახელი / ფასი</th>
+                        <th className="px-4 py-2 text-left border-r border-green-500">მყიდველი / გამყიდველი</th>
+                        <th className="px-4 py-2 text-left border-r border-green-500">საფულის მისამართი</th>
+                        <th className="px-4 py-2 text-left border-r border-green-500">ტრანზაქცია</th>
+                        <th className="px-4 py-2 text-left border-r border-green-500">თარიღი</th>
+                        <th className="px-4 py-2 text-center">მოქმედება</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paidPayments.map((payment, index) => (
+                        <tr key={payment.id} className={`border-b ${index % 2 === 0 ? 'bg-gray-50' : 'bg-white'} hover:bg-gray-100`}>
+                          <td className="px-4 py-4 border-r border-gray-200">
+                            <div className="flex items-center">
+                              <div className="bg-green-100 p-2 rounded-full flex items-center justify-center mr-3">
+                                <svg className="h-5 w-5 text-green-600" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                  <path d="M4 4a2 2 0 00-2 2v1h16V6a2 2 0 00-2-2H4z" />
+                                  <path fillRule="evenodd" d="M18 9H2v5a2 2 0 002 2h12a2 2 0 002-2V9zM4 13a1 1 0 011-1h1a1 1 0 110 2H5a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2H9z" clipRule="evenodd" />
                                 </svg>
+                              </div>
+                              <div>
+                                <div className="font-medium">{payment.chatName || "პროდუქტი"}</div>
+                                <div className="text-sm text-gray-500">${payment.amount}</div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-4 border-r border-gray-200">
+                            <div className="flex flex-col">
+                              <div className="flex items-center text-sm">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1 text-blue-500" viewBox="0 0 20 20" fill="currentColor">
+                                  <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
+                                </svg>
+                                <span className="text-blue-600 font-medium">მყიდველი:</span>
+                                <span className="ml-1">{payment.buyerName || "N/A"}</span>
+                              </div>
+                              <div className="flex items-center text-sm mt-1">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1 text-purple-500" viewBox="0 0 20 20" fill="currentColor">
+                                  <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
+                                </svg>
+                                <span className="text-purple-600 font-medium">გამყიდველი:</span>
+                                <span className="ml-1">{payment.sellerName || "N/A"}</span>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-4 border-r border-gray-200">
+                            <div className="text-center">
+                              <span className="bg-gray-100 text-gray-800 py-1 px-2 rounded font-mono text-xs inline-block">
+                                {payment.stripeSessionId ? payment.stripeSessionId.substring(0, 16) + "..." : "N/A"}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-4 border-r border-gray-200">
+                            <div className="flex justify-center">
+                              <span className={`py-1 px-3 rounded-full text-xs inline-block ${payment.paymentMethod === 'stripe' ? 'bg-blue-50 text-blue-600' : 'bg-yellow-50 text-yellow-600'}`}>
+                                {payment.paymentMethod === 'stripe' ? 'Stripe' : 'Bitcoin'}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-4 border-r border-gray-200">
+                            <div className="flex flex-col">
+                              <div className="text-sm text-purple-700">ID: {payment.id.substring(0, 7)}</div>
+                              <div className="text-xs text-gray-500 flex items-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                                {new Date(payment.createdAt).toLocaleDateString()} {new Date(payment.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-4">
+                            <div className="flex justify-center gap-1">
+                              <button 
+                                onClick={() => handleJoinChatFromPaidPayment(payment)}
+                                disabled={processing === payment.id}
+                                className="px-3 py-1 bg-green-500 text-white text-xs font-medium rounded hover:bg-green-600 transition-colors"
+                              >
+                                ჩატში
+                              </button>
+                              <button 
+                                className="px-3 py-1 bg-gray-500 text-white text-xs font-medium rounded hover:bg-gray-600 transition-colors"
+                              >
+                                დეტალურად
+                              </button>
+                              <button 
+                                onClick={() => handleDeletePaidPayment(payment.id)}
+                                disabled={processing === payment.id}
+                                className="px-3 py-1 bg-red-500 text-white text-xs font-medium rounded hover:bg-red-600 transition-colors"
+                              >
                                 წაშლა
                               </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+
+        {/* თუ გვაქვს "Wallet Added" ნოტიფიკაციები */}
+        {walletNotifications.length > 0 && (
+          <div className="mb-8">
+            <h3 className="text-lg font-semibold mb-4 flex items-center">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-indigo-600" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M4 4a2 2 0 00-2 2v1h16V6a2 2 0 00-2-2H4z" />
+                <path fillRule="evenodd" d="M18 9H2v5a2 2 0 002 2h12a2 2 0 002-2V9zM4 13a1 1 0 011-1h1a1 1 0 110 2H5a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2H9z" clipRule="evenodd" />
+              </svg>
+              საფულის ინფორმაცია ({walletNotifications.length})
+            </h3>
+            <div className="grid gap-4 grid-cols-1 md:grid-cols-2 xl:grid-cols-3 max-h-[50vh] sm:max-h-[60vh] md:max-h-[70vh] lg:max-h-[75vh] overflow-y-auto pr-2">
+              {walletNotifications.map((notification) => (
+                <div key={notification.id} className="bg-white rounded-lg shadow-md border border-gray-200 p-4 hover:shadow-lg transition-shadow duration-200">
+                  <div className="flex justify-between items-start">
+                    <div className="text-sm font-medium text-gray-500">
+                      {new Date(notification.createdAt).toLocaleString()}
+                    </div>
+                    <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-indigo-100 text-indigo-800">
+                      {notification.read ? 'წაკითხული' : 'ახალი'}
+                    </span>
+                  </div>
+                  <div className="mt-2">
+                    <div className="text-base font-semibold text-gray-900">
+                      პროდუქტი: {notification.productName}
+                    </div>
+                    <div className="mt-2 text-sm text-gray-600">
+                      <p>მყიდველი: {notification.buyerName}</p>
+                      <p>გამყიდველი: {notification.sellerName}</p>
+                      <p className="mt-1 font-mono text-xs bg-gray-100 rounded p-1">
+                        {notification.walletAddress}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="mt-4 flex space-x-2">
+                    <button
+                      onClick={() => handleJoinChatFromNotification(notification)}
+                      disabled={processing === notification.id}
+                      className="flex-1 inline-flex justify-center items-center px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {processing === notification.id ? 'მიმდინარეობს...' : 'ჩატში შესვლა'}
+                    </button>
+                    <button
+                      onClick={() => handleDeleteNotification(notification.id)}
+                      disabled={processing === notification.id}
+                      className="inline-flex justify-center items-center px-3 py-2 bg-red-100 hover:bg-red-200 text-red-700 text-sm font-medium rounded-md shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
       
       {showDetailsModal && selectedNotification && (
-        <div className="fixed inset-0 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-          <div className="bg-gradient-to-br from-white to-gray-100 rounded-xl shadow-2xl max-w-2xl w-full relative border border-gray-200 transform transition-all scale-100 opacity-100">
-            {/* Modal Header */}
-            <div className="p-6 border-b border-gray-200 bg-gradient-to-r from-gray-50 to-white rounded-t-xl flex justify-between items-center">
-              <h3 className="text-xl font-bold text-gray-800 flex items-center gap-3">
-                 <div className="p-2 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-lg shadow-blue-200">
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                     <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
-                  </svg>
-                 </div>
-                ტრანზაქციის დეტალები
-              </h3>
+        <div className="fixed inset-0 flex items-center justify-center z-50 bg-gray-800 bg-opacity-75">
+          <div className="bg-white rounded-lg p-6 max-w-lg w-full">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-medium">ინფორმაცია</h3>
               <button 
                 onClick={() => setShowDetailsModal(false)}
-                className="text-gray-400 hover:text-gray-600 transition-colors p-1 rounded-full hover:bg-gray-200">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                className="text-gray-400 hover:text-gray-500"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </div>
-
-            {/* Modal Body */}
-            <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
-              {/* Column 1 */}
-              <div className="space-y-4">
-                <div className="p-4 bg-gray-50 rounded-lg border border-gray-200 shadow-sm">
-                  <p className="text-sm font-semibold text-gray-500 mb-1">არხის სახელი</p>
-                  <p className="text-lg font-bold text-indigo-700 truncate">{selectedNotification.productName}</p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700">პროდუქტის სახელი</label>
+                <p className="mt-1 text-sm text-gray-900">{selectedNotification.productName}</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">საფულის მისამართი</label>
+                <p className="mt-1 text-sm text-gray-900 font-mono break-all">{selectedNotification.walletAddress}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">მყიდველი</label>
+                  <p className="mt-1 text-sm text-gray-900">{selectedNotification.buyerName}</p>
                 </div>
-                <div className="p-4 bg-gray-50 rounded-lg border border-gray-200 shadow-sm">
-                  <p className="text-sm font-semibold text-gray-500 mb-1">თანხა</p>
-                  <p className="text-lg font-bold text-emerald-700">${selectedNotification.amount}</p>
-                </div>
-                <div className="p-4 bg-gray-50 rounded-lg border border-gray-200 shadow-sm">
-                  <p className="text-sm font-semibold text-gray-500 mb-1">გადახდის მეთოდი</p>
-                  <p className="text-base font-medium text-gray-800">{selectedNotification.paymentMethod === 'stripe' ? 'Stripe' : 'Bitcoin'}</p>
-                </div>
-                <div className="p-4 bg-gray-50 rounded-lg border border-gray-200 shadow-sm">
-                  <p className="text-sm font-semibold text-gray-500 mb-1">შექმნის თარიღი</p>
-                  <p className="text-sm text-gray-700">{new Date(selectedNotification.createdAt).toLocaleString()}</p>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">გამყიდველი</label>
+                  <p className="mt-1 text-sm text-gray-900">{selectedNotification.sellerName}</p>
                 </div>
               </div>
-              
-              {/* Column 2 */}
-              <div className="space-y-4">
-                 <div className="p-4 bg-blue-50 rounded-lg border border-blue-200 shadow-sm">
-                  <p className="text-sm font-semibold text-blue-600 mb-1">მყიდველი</p>
-                  <p className="text-base font-medium text-gray-800">{selectedNotification.buyerName}</p>
-                  <p className="text-xs text-gray-500 mt-1 font-mono">ID: {selectedNotification.buyerId}</p>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">თანხა</label>
+                  <p className="mt-1 text-sm text-gray-900">${selectedNotification.amount}</p>
                 </div>
-                 <div className="p-4 bg-indigo-50 rounded-lg border border-indigo-200 shadow-sm">
-                  <p className="text-sm font-semibold text-indigo-600 mb-1">გამყიდველი</p>
-                  <p className="text-base font-medium text-gray-800">{selectedNotification.sellerName}</p>
-                  <p className="text-xs text-gray-500 mt-1 font-mono">ID: {selectedNotification.sellerId}</p>
-                </div>
-                <div className="p-4 bg-amber-50 rounded-lg border border-amber-200 shadow-sm">
-                  <p className="text-sm font-semibold text-amber-600 mb-1">საფულის მისამართი</p>
-                  <p className="text-sm text-gray-800 font-mono break-all relative group">{selectedNotification.walletAddress}
-                     <button 
-                        onClick={() => navigator.clipboard.writeText(selectedNotification.walletAddress)}
-                        className="absolute -top-1 -right-1 text-gray-400 hover:text-gray-700 transition-colors p-1 rounded opacity-0 group-hover:opacity-100 bg-white bg-opacity-50 backdrop-blur-sm">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75" />
-                        </svg>
-                      </button>
-                  </p>
-                </div>
-                <div className="p-4 bg-purple-50 rounded-lg border border-purple-200 shadow-sm">
-                  <p className="text-sm font-semibold text-purple-600 mb-1">ტრანზაქციის ID</p>
-                  <p className="text-sm font-medium text-gray-800">{selectedNotification.transactionId}</p>
-                  <p className="text-xs text-gray-500 mt-1 font-mono">Chat ID: {selectedNotification.chatId}</p>
-                   <p className="text-xs text-gray-500 mt-1 font-mono">Product ID: {selectedNotification.productId}</p>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">გადახდის მეთოდი</label>
+                  <p className="mt-1 text-sm text-gray-900">{selectedNotification.paymentMethod}</p>
                 </div>
               </div>
             </div>
-
-            {/* Modal Footer */}
-            <div className="p-4 bg-gray-50 rounded-b-xl border-t border-gray-200 flex justify-end space-x-3">
-                <button 
-                  onClick={() => handleJoinChatFromNotification(selectedNotification)}
-                  disabled={processing === selectedNotification.id}
-                  className="inline-flex items-center justify-center px-5 py-2 text-sm font-medium rounded-lg 
-                          bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-lg shadow-green-200
-                          hover:from-emerald-700 hover:to-green-700 focus:outline-none focus:ring-2 
-                          focus:ring-offset-2 focus:ring-green-500 transition-all duration-200 transform hover:scale-105">
-                  {processing === selectedNotification.id ? (
-                    <div className="flex items-center justify-center">
-                      <div className="animate-spin h-5 w-5 mr-2 border-2 border-white border-t-transparent rounded-full"></div>
-                      <span>დაელოდეთ...</span>
-                    </div>
-                  ) : (
-                    <>
-                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4 mr-2">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6.8 3.11 2.19 4.024C6.07 18.332 7.5 19.5 9 19.5h6c1.5 0 2.93-1.168 3.99-2.715.32-.297.71-.53 1.13-.69M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75" />
-                      </svg>
-                      <span>შეუერთდი ჩატს</span>
-                    </>
-                  )}
-                </button>
-                <button 
-                  onClick={() => setShowDetailsModal(false)}
-                  className="px-5 py-2 text-sm font-medium text-gray-700 bg-white rounded-lg border border-gray-300 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors">
-                  დახურვა
-                </button>
+            <div className="mt-6 flex justify-end space-x-3">
+              <button 
+                onClick={() => setShowDetailsModal(false)}
+                className="inline-flex justify-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+              >
+                დახურვა
+              </button>
+              <button
+                onClick={() => handleJoinChatFromNotification(selectedNotification)}
+                className="inline-flex justify-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+              >
+                ჩატში შესვლა
+              </button>
             </div>
           </div>
         </div>

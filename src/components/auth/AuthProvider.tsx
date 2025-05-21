@@ -20,6 +20,7 @@ interface AuthContextType {
   error: string | null;
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
+  refreshUserData: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -73,6 +74,58 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // ახალი ფუნქცია მომხმარებლის მონაცემების განახლებისთვის
+  const refreshUserData = async () => {
+    if (!auth.currentUser) {
+      console.warn("Cannot refresh user data: No authenticated user");
+      return;
+    }
+    
+    try {
+      setLoading(true);
+      const firebaseUser = auth.currentUser;
+      const userRef = doc(db, 'users', firebaseUser.uid);
+      const userDoc = await getDoc(userRef);
+      
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        
+        // შევინახოთ უახლესი მონაცემები
+        const isAdmin = await isUserAdmin(firebaseUser.uid);
+        
+        // გადავამოწმოთ ფოტო
+        let photoURL = userData.photoURL;
+        
+        // თუ userData-ში არის adminPhotoURL ველი გამოვიყენოთ ის
+        if (userData.adminPhotoURL) {
+          photoURL = userData.adminPhotoURL;
+          console.log("Using adminPhotoURL from user data:", photoURL);
+        } else if (!photoURL) {
+          photoURL = firebaseUser.photoURL || undefined;
+        }
+        
+        setUser({
+          id: firebaseUser.uid,
+          email: userData.email || firebaseUser.email || "",
+          name: userData.name || firebaseUser.displayName || getNameFromEmail(firebaseUser.email || ""),
+          photoURL: photoURL,
+          isAdmin,
+          // შევინახოთ adminPhotoURL ცალკეც, თუ არსებობს
+          adminPhotoURL: userData.adminPhotoURL || photoURL
+        });
+        
+        console.log("User data refreshed successfully");
+      } else {
+        console.error("User document not found during refresh");
+      }
+    } catch (error) {
+      console.error("Error refreshing user data:", error);
+      setError("Failed to refresh user data");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -160,11 +213,15 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           console.log("User admin status:", isAdmin);
           
           // დავაყენოთ მომხმარებლის ობიექტი
+          const userDocData = userDoc.data();
+          const adminPhotoURL = userDocData?.adminPhotoURL || photoURL || undefined;
+          
           setUser({
             id: firebaseUser.uid,
             email: email,
             name: userName,
             photoURL: photoURL || undefined,
+            adminPhotoURL: adminPhotoURL,
             isAdmin
           });
         } catch (error) {
@@ -231,7 +288,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, error, signInWithGoogle, signOut }}>
+    <AuthContext.Provider value={{ user, loading, error, signInWithGoogle, signOut, refreshUserData }}>
       {children}
     </AuthContext.Provider>
   );

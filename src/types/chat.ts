@@ -41,6 +41,23 @@ export interface Chat {
   paymentId?: string;
   paymentSessionId?: string;
   feeAmount?: number;
+  sellerConfirmed?: boolean;
+  sellerConfirmedAt?: number;
+  transferTimerStarted?: boolean;
+  transferTimerStartedAt?: number;
+  transferReadyTime?: number;
+  transferStatus?: 'pending' | 'completed' | 'cancelled';
+  sellerId?: string;
+  adminId?: string;
+  adminPhotoURL?: string;
+  hasPrivateAdminChat?: boolean;
+  privateAdminChatId?: string;
+  privateAdminChatCreatedAt?: number;
+  totalAmount?: number;
+  productPrice?: number;
+  timerActive?: boolean;
+  timerStartDate?: number;
+  timerEndDate?: number;
 }
 
 export interface ChatState {

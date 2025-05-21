@@ -23,6 +23,7 @@ export default function ProductPage({ params }: ProductPageProps) {
   
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
+  const [youtubeDataLoaded, setYoutubeDataLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [contactLoading, setContactLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -37,15 +38,24 @@ export default function ProductPage({ params }: ProductPageProps) {
       try {
         setLoading(true);
         setError(null);
+        setYoutubeDataLoaded(false);
 
         const productDocRef = doc(db, "products", productId);
         const productDoc = await getDoc(productDocRef);
 
         if (productDoc.exists()) {
+          const productData = productDoc.data();
           setProduct({
             id: productDoc.id,
-            ...productDoc.data()
+            ...productData
           } as Product);
+          
+          // Check if essential YouTube data is loaded
+          const hasLogo = productData.channelLogo || (productData.imageUrls && productData.imageUrls.length > 0);
+          const hasSubscribers = productData.subscribers !== undefined;
+          const hasName = !!productData.displayName;
+          
+          setYoutubeDataLoaded(hasLogo && hasSubscribers && hasName);
         } else {
           setError("Product not found");
         }
@@ -510,10 +520,10 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
 
   return (
     <div className="w-full min-h-screen bg-gray-100 flex flex-col">
-      <div className="w-full px-4 py-6 flex-grow">
+      <div className="w-full px-3 py-4 flex-grow">
         {/* Header info */}
-        <div className="flex justify-between items-center mb-4 text-sm text-gray-500 px-2">
-          <div className="flex items-center space-x-3">
+        <div className="flex justify-between items-center mb-3 text-xs text-gray-500 px-2">
+          <div className="flex items-center space-x-2">
             <span>Listed: {product.createdAt ? new Date(product.createdAt).toLocaleDateString() : 'Recently'}</span>
             <span>|</span>
             <span>Updated: {product.createdAt ? new Date(product.createdAt).toLocaleDateString() : 'Recently'}</span>
@@ -524,9 +534,9 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
             <button 
               onClick={handleDeleteListing}
               disabled={deleteLoading}
-              className="text-gray-600 hover:text-red-500 flex items-center"
+              className="text-gray-600 hover:text-red-500 flex items-center text-xs"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" viewBox="0 0 20 20" fill="currentColor">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" viewBox="0 0 20 20" fill="currentColor">
                 <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
               </svg>
               This channel is mine, delete listing!
@@ -535,31 +545,31 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
         </div>
         
         {/* Main content - 3 column row */}
-        <div className="w-full mb-8">
-          <div className="flex flex-col lg:flex-row gap-8">
+        <div className="w-full mb-6">
+          <div className="flex flex-col lg:flex-row gap-5">
             {/* Left column - Logo (1/4) */}
             <div className="lg:w-1/4">
-              <div className="rounded-full overflow-hidden w-64 h-64 mx-auto mb-8 border-4 border-gray-200">
+              <div className="rounded-full overflow-hidden w-48 h-48 mx-auto mb-6 border-4 border-gray-200">
                 {/* არხის ლოგოს ჩვენება, თუ არსებობს, წინააღმდეგ შემთხვევაში ჩვეულებრივი სურათი */}
                 {product.channelLogo ? (
                   <Image 
                     src={product.channelLogo} 
                     alt={`${product.displayName} logo`}
-                    width={256}
-                    height={256}
+                    width={192}
+                    height={192}
                     className="w-full h-full object-cover"
                   />
                 ) : product.imageUrls && product.imageUrls.length > 0 ? (
                   <Image 
                     src={product.imageUrls[0]} 
                     alt={product.displayName}
-                    width={256}
-                    height={256}
+                    width={192}
+                    height={192}
                     className="w-full h-full object-cover"
                   />
                 ) : (
                   <div className="w-full h-full bg-gray-200 flex items-center justify-center">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-32 w-32 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-24 w-24 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
@@ -567,50 +577,61 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
                 )}
               </div>
               
-              <div className="flex gap-3 mt-4">
+              <div className="flex gap-2 mt-3">
                 <button 
                   onClick={handleContactSeller}
-                  disabled={contactLoading || !product}
-                  className="flex-1 py-2 px-3 bg-black text-white font-medium rounded-full text-sm hover:bg-gray-800 transition-colors"
+                  disabled={contactLoading || !product || !youtubeDataLoaded}
+                  className={`flex-1 py-1.5 px-2 ${youtubeDataLoaded ? 'bg-black hover:bg-gray-800' : 'bg-gray-400 cursor-not-allowed'} text-white font-medium rounded-full text-sm transition-colors`}
                 >
-                  {contactLoading ? 'Processing...' : 'Purchase Channel'}
+                  {contactLoading ? 'Processing...' : !youtubeDataLoaded ? 'Loading data...' : 'Purchase Channel'}
                 </button>
                 <button 
                   onClick={handleToggleFavorite}
-                  disabled={favoriteLoading || !product}
-                  className={`flex-1 py-2 px-3 border font-medium rounded-full text-sm transition-colors ${
-                    isFavorite 
-                      ? 'bg-pink-500 text-white border-pink-500 hover:bg-pink-600' 
-                      : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                  disabled={favoriteLoading || !product || !youtubeDataLoaded}
+                  className={`flex-1 py-1.5 px-2 border font-medium rounded-full text-sm transition-colors ${
+                    !youtubeDataLoaded 
+                      ? 'border-gray-300 bg-gray-100 text-gray-400 cursor-not-allowed'
+                      : isFavorite 
+                        ? 'bg-pink-500 text-white border-pink-500 hover:bg-pink-600' 
+                        : 'border-gray-300 text-gray-700 hover:bg-gray-50'
                   }`}
                 >
-                  {favoriteLoading ? 'Updating...' : isFavorite ? 'Remove from Favorites' : 'Add to Favorites'}
+                  {favoriteLoading ? 'Updating...' : !youtubeDataLoaded ? 'Loading...' : isFavorite ? 'Remove from Favorites' : 'Add to Favorites'}
                 </button>
               </div>
+              
+              {!youtubeDataLoaded && (
+                <div className="mt-3 text-center text-xs text-gray-500">
+                  <div className="flex items-center justify-center gap-2">
+                    <div className="animate-spin rounded-full h-3 w-3 border-t-2 border-b-2 border-blue-500"></div>
+                    Loading channel data from YouTube...
+                  </div>
+                </div>
+              )}
             </div>
             
             {/* Middle column - Channel info (1/2) */}
             <div className="lg:w-1/2">
               <div className="flex flex-col xl:flex-row xl:justify-between">
-                <div className="mb-6 xl:mb-0">
-                  <h1 className="text-4xl font-bold text-gray-900 mb-2">{product.displayName}</h1>
-                  <div className="text-gray-600 mb-6 text-lg">
+                <div className="mb-4 xl:mb-0">
+                  <h1 className="text-3xl font-bold text-gray-900 mb-1">{product.displayName}</h1>
+                  <div className="text-gray-600 mb-4 text-base">
                     {product.category} / <a href={product.accountLink} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">{product.accountLink}</a>
                   </div>
                   
-                  <div className="border-l-4 border-blue-500 pl-5 space-y-2 mb-8">
-                    <div className="text-gray-700 text-lg">{product.subscribers?.toLocaleString() || 0} — subscribers</div>
-                    <div className="text-gray-700 text-lg">${product.monthlyIncome || 0} — income (month)</div>
-                    <div className="text-gray-700 text-lg">${product.monthlyExpenses || 0} — expense (month)</div>
+                  <div className="border-l-4 border-blue-500 pl-4 space-y-1 mb-6">
+                    <div className="text-gray-700 text-base">{product.subscribers?.toLocaleString() || 0} — subscribers</div>
+                    <div className="text-gray-700 text-base">${product.monthlyIncome || 0} — income (month)</div>
+                    <div className="text-gray-700 text-base">${product.monthlyExpenses || 0} — expense (month)</div>
                   </div>
                   
-                  <div className="text-5xl font-bold text-gray-900 mb-6">$ {product.price}</div>
+                  <div className="text-4xl font-bold text-gray-900 mb-4">$ {product.price}</div>
                 </div>
               </div>
               
-              <div className="mt-4 flex items-center space-x-2">
+              <div className="mt-3 flex items-center space-x-2">
                 {(product as any).isVerified && (
-                  <div className="bg-gray-100 text-gray-800 px-3 py-1 rounded-full font-medium flex items-center text-xs">
+                  <div className="bg-gray-100 text-gray-800 px-2 py-0.5 rounded-full font-medium flex items-center text-xs">
                     <svg className="w-3 h-3 mr-1 text-green-600" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
                       <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"></path>
                     </svg>
@@ -618,19 +639,19 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
                   </div>
                 )}
                 {(product as any).isVIP && (
-                  <div className="bg-gray-800 text-white px-3 py-1 rounded-full font-medium text-xs">VIP</div>
+                  <div className="bg-gray-800 text-white px-2 py-0.5 rounded-full font-medium text-xs">VIP</div>
                 )}
                 {(product as any).discount && (
-                  <div className="bg-gray-800 text-white px-3 py-1 rounded-full font-medium text-xs">-{(product as any).discount}%</div>
+                  <div className="bg-gray-800 text-white px-2 py-0.5 rounded-full font-medium text-xs">-{(product as any).discount}%</div>
                 )}
               </div>
             </div>
 
             {/* Right column - Attached images (1/4) */}
-            <div className="lg:w-1/4">
-              <h2 className="text-2xl font-bold text-gray-800 mb-4 text-center">Attached images:</h2>
+            <div className="lg:w-1/4 fixed top-1/2 transform -translate-y-1/2 right-6">
+              <h2 className="text-xl font-bold text-gray-800 mb-3">Attached images:</h2>
               {product.imageUrls && product.imageUrls.length > 0 ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4"> {/* Adjusted grid-cols for potentially smaller space */}
+                <div className="grid grid-cols-2 gap-3">
                   {product.imageUrls.map((url, index) => (
                     <div 
                       key={index} 
@@ -640,24 +661,24 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
                       <Image
                         src={url}
                         alt={`${product.displayName} - Image ${index + 1}`}
-                        width={200}
-                        height={200}
+                        width={150}
+                        height={150}
                         className="w-full h-full object-cover"
                       />
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="text-gray-500 text-center py-8">No images attached</div>
+                <div className="text-gray-500 text-center py-6">No images attached</div>
               )}
             </div>
           </div>
         </div>
         
         {/* Description section (Full width, below the 3-column row) */}
-        <div className="w-full mt-8">
-          <h2 className="text-2xl font-bold text-gray-800 mb-4">Description:</h2>
-          <div className="text-gray-700 text-lg">
+        <div className="w-full mt-6">
+          <h2 className="text-xl font-bold text-gray-800 mb-3">Description:</h2>
+          <div className="text-gray-700 text-base">
             {/* ვამუშავებთ აღწერის ტექსტს მარტივი ფორმატით */}
             {product.description && (
               <>
@@ -668,35 +689,35 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
                   <>
                     {/* პირველი ნაწილი description-დან */}
                     {product.description.split("Monetization:")[0]?.trim() && (
-                      <p className="mb-4 whitespace-pre-wrap">{product.description.split("Monetization:")[0]?.trim()}</p>
+                      <p className="mb-3 whitespace-pre-wrap">{product.description.split("Monetization:")[0]?.trim()}</p>
                     )}
                     
                     {/* Monetization */}
-                    <p className="mb-2"><strong>Monetization:</strong> <span className="whitespace-pre-wrap">{product.description.split("Monetization:")[1]?.split("Ways of promotion:")[0]?.trim() || "N/A"}</span></p>
+                    <p className="mb-1.5"><strong>Monetization:</strong> <span className="whitespace-pre-wrap">{product.description.split("Monetization:")[1]?.split("Ways of promotion:")[0]?.trim() || "N/A"}</span></p>
                     
                     {/* Ways of promotion */}
                     {product.description.includes("Ways of promotion:") && (
-                      <p className="mb-2"><strong>Ways of promotion:</strong> <span className="whitespace-pre-wrap">{product.description.split("Ways of promotion:")[1]?.split("Sources of expense:")[0]?.trim() || "N/A"}</span></p>
+                      <p className="mb-1.5"><strong>Ways of promotion:</strong> <span className="whitespace-pre-wrap">{product.description.split("Ways of promotion:")[1]?.split("Sources of expense:")[0]?.trim() || "N/A"}</span></p>
                     )}
                     
                     {/* Sources of expense */}
                     {product.description.includes("Sources of expense:") && (
-                      <p className="mb-2"><strong>Sources of expense:</strong> <span className="whitespace-pre-wrap">{product.description.split("Sources of expense:")[1]?.split("Sources of income:")[0]?.trim() || "N/A"}</span></p>
+                      <p className="mb-1.5"><strong>Sources of expense:</strong> <span className="whitespace-pre-wrap">{product.description.split("Sources of expense:")[1]?.split("Sources of income:")[0]?.trim() || "N/A"}</span></p>
                     )}
                     
                     {/* Sources of income */}
                     {product.description.includes("Sources of income:") && (
-                      <p className="mb-2"><strong>Sources of income:</strong> <span className="whitespace-pre-wrap">{product.description.split("Sources of income:")[1]?.split("To support the channel, you need:")[0]?.trim() || "N/A"}</span></p>
+                      <p className="mb-1.5"><strong>Sources of income:</strong> <span className="whitespace-pre-wrap">{product.description.split("Sources of income:")[1]?.split("To support the channel, you need:")[0]?.trim() || "N/A"}</span></p>
                     )}
                     
                     {/* Support requirements */}
                     {product.description.includes("To support the channel, you need:") && (
-                      <p className="mb-2"><strong>To support the channel, you need:</strong> <span className="whitespace-pre-wrap">{product.description.split("To support the channel, you need:")[1]?.split("Content:")[0]?.trim() || "N/A"}</span></p>
+                      <p className="mb-1.5"><strong>To support the channel, you need:</strong> <span className="whitespace-pre-wrap">{product.description.split("To support the channel, you need:")[1]?.split("Content:")[0]?.trim() || "N/A"}</span></p>
                     )}
                     
                     {/* Content */}
                     {product.description.includes("Content:") && (
-                      <p className="mb-2"><strong>Content:</strong> <span className="whitespace-pre-wrap">{product.description.split("Content:")[1]?.split("$")[0]?.trim() || "N/A"}</span></p>
+                      <p className="mb-1.5"><strong>Content:</strong> <span className="whitespace-pre-wrap">{product.description.split("Content:")[1]?.split("$")[0]?.trim() || "N/A"}</span></p>
                     )}
                     
                     {/* Income */}
@@ -715,7 +736,7 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
             
             {/* additionalDetails ნაწილი - ვინაიდან შეიძლება დამატებით გვქონდეს */}
             {(product as any).additionalDetails && (
-              <div className="mt-4">
+              <div className="mt-3">
                 {Object.entries((product as any).additionalDetails).map(([key, value]) => (
                   <p key={key}><strong>{key}:</strong> {String(value)}</p>
                 ))}
@@ -733,10 +754,10 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
         >
           <div className="relative max-w-4xl max-h-[90vh] overflow-hidden">
             <button 
-              className="absolute top-4 right-4 w-10 h-10 bg-white rounded-full flex items-center justify-center text-gray-800 z-10 shadow-md"
+              className="absolute top-4 right-4 w-8 h-8 bg-white rounded-full flex items-center justify-center text-gray-800 z-10 shadow-md"
               onClick={() => setSelectedImage(null)}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
@@ -752,17 +773,17 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
       )}
       
       {/* Footer */}
-      <footer className="bg-gray-900 text-white py-4 px-6 mt-auto">
+      <footer className="bg-gray-900 text-white py-3 px-4 mt-auto text-sm">
         <div className="container mx-auto flex flex-col md:flex-row justify-between items-center">
-          <div className="mb-4 md:mb-0">
-            <div className="text-sm">MateSwap LP</div>
+          <div className="mb-2 md:mb-0">
+            <div className="text-xs">MateSwap LP</div>
             <div className="text-xs text-gray-400">Address: 85 First Floor Great Portland Street, London, England, W1W 7LT</div>
           </div>
-          <div className="flex space-x-6">
-            <Link href="/terms" className="text-sm hover:text-gray-300 transition-colors">
+          <div className="flex space-x-4">
+            <Link href="/terms" className="text-xs hover:text-gray-300 transition-colors">
               Terms and Conditions
             </Link>
-            <Link href="/privacy" className="text-sm hover:text-gray-300 transition-colors">
+            <Link href="/privacy" className="text-xs hover:text-gray-300 transition-colors">
               Privacy Policy
             </Link>
           </div>

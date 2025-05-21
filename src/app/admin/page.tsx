@@ -8,6 +8,7 @@ import { useAuth } from "@/components/auth/AuthProvider";
 import AdminChatList from "@/components/chat/AdminChatList";
 import EscrowChatList from "@/components/chat/EscrowChatList";
 import ChatInterface from "@/components/chat/ChatInterface";
+import ProfilePhotoUploader from "@/components/admin/ProfilePhotoUploader";
 import { collection, query, getDocs, orderBy, deleteDoc, doc, limit, where, startAt, endAt } from "firebase/firestore";
 import { db } from "@/firebase/config";
 import { Product } from "@/types/product";
@@ -221,15 +222,21 @@ export default function AdminPage() {
     return null; // Will redirect due to the useEffect
   }
 
+  // ეს ფუნქციები გადაეწოდება AdminChatList-ს
+  const handleOpenProductsModal = () => setShowProductsModal(true);
+  const handleOpenEscrowChats = () => setShowEscrowChats(true);
+
   return (
     <div className="w-full px-4 py-4 admin-page-container">
       
-      <div className="mb-6 grid grid-cols-1 md:grid-cols-1 gap-4">
-       
-      </div>
-      
       <div className="mb-6 bg-gradient-to-br from-white to-gray-50 rounded-xl shadow-xl border border-gray-200 overflow-hidden w-full">
-        <AdminChatList />
+        <AdminChatList
+          userPhoto={user?.adminPhotoURL || user?.photoURL}
+          userName={user?.name}
+          onOpenProductsModal={handleOpenProductsModal}
+          onOpenEscrowChats={handleOpenEscrowChats}
+          profilePhotoUploader={<ProfilePhotoUploader />}
+        />
       </div>
       
       {/* პროდუქტების მართვის მოდალური ფანჯარა */}
