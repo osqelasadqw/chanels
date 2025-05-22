@@ -10,6 +10,7 @@ import { doc, getDoc, addDoc, collection, query, where, getDocs, deleteDoc, setD
 import { Product } from "@/types/product";
 import { ref, push, get } from "firebase/database";
 import { rtdb } from "@/firebase/config";
+import { getChannelLogo, extractChannelIdFromUrl } from "@/firebase/channelLogos";
 
 interface ProductPageProps {
   params: {
@@ -45,17 +46,65 @@ export default function ProductPage({ params }: ProductPageProps) {
 
         if (productDoc.exists()) {
           const productData = productDoc.data();
-          setProduct({
+          const productWithId = {
             id: productDoc.id,
             ...productData
-          } as Product);
+          } as Product;
+          
+          // თუ ეს YouTube არხია და არსებობს არხის ID, შევამოწმოთ channelLogos კოლექციაში
+          if (productData.platform === "YouTube") {
+            // თუ არხის ID უკვე არის პროდუქტის მონაცემებში
+            if (productData.channelId) {
+              try {
+                const logoData = await getChannelLogo(productData.channelId);
+                if (logoData && logoData.logoUrl) {
+                  // განვაახლოთ ლოგოს URL ჩვენს პროდუქტის ობიექტში
+                  productWithId.channelLogo = logoData.logoUrl;
+                  
+                  // განვაახლოთ ბაზაშიც, თუ საჭიროა
+                  if (productData.channelLogo !== logoData.logoUrl) {
+                    await updateDoc(productDocRef, {
+                      channelLogo: logoData.logoUrl
+                    });
+                  }
+                }
+              } catch (logoErr) {
+                console.error("Error fetching channel logo:", logoErr);
+                // განვაგრძოთ ჩვეულებრივად, ლოგოს გარეშეც თუ შეცდომაა
+              }
+            } 
+            // თუ არხის ID არაა პროდუქტში, მაგრამ არის ლინკი
+            else if (productData.accountLink) {
+              const channelId = extractChannelIdFromUrl(productData.accountLink);
+              if (channelId) {
+                try {
+                  // შევამოწმოთ არის თუ არა ლოგო channelLogos კოლექციაში
+                  const logoData = await getChannelLogo(channelId);
+                  if (logoData && logoData.logoUrl) {
+                    // განვაახლოთ ლოგოს URL ჩვენს პროდუქტის ობიექტში
+                    productWithId.channelLogo = logoData.logoUrl;
+                    
+                    // განვაახლოთ ბაზაშიც
+                    await updateDoc(productDocRef, {
+                      channelLogo: logoData.logoUrl,
+                      channelId: channelId
+                    });
+                  }
+                } catch (logoErr) {
+                  console.error("Error fetching channel logo:", logoErr);
+                }
+              }
+            }
+          }
+          
+          setProduct(productWithId);
           
           // Check if essential YouTube data is loaded
-          const hasLogo = productData.channelLogo || (productData.imageUrls && productData.imageUrls.length > 0);
-          const hasSubscribers = productData.subscribers !== undefined;
-          const hasName = !!productData.displayName;
+          const hasLogo = !!productWithId.channelLogo || (productWithId.imageUrls && productWithId.imageUrls.length > 0);
+          const hasSubscribers = productWithId.subscribers !== undefined;
+          const hasName = !!productWithId.displayName;
           
-          setYoutubeDataLoaded(hasLogo && hasSubscribers && hasName);
+          setYoutubeDataLoaded(!!(hasLogo && hasSubscribers && hasName));
         } else {
           setError("Product not found");
         }

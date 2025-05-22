@@ -8,6 +8,7 @@ import { collection, addDoc, query, where, getDocs } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { db, storage } from "@/firebase/config";
 import Image from "next/image";
+import { saveChannelLogo, downloadAndStoreChannelLogo, extractChannelIdFromUrl } from "@/firebase/channelLogos";
 
 const platforms = ["YouTube", "TikTok", "Twitter", "Instagram", "Facebook", "Telegram"];
 
@@ -29,6 +30,7 @@ interface ProductFormData {
   monetizationEnabled: boolean;
   imageUrls: string[];
   channelLogo?: string;
+  channelId?: string;
 }
 
 const initialFormData: ProductFormData = {
@@ -48,7 +50,8 @@ const initialFormData: ProductFormData = {
   supportRequirements: "",
   monetizationEnabled: false,
   imageUrls: [],
-  channelLogo: ""
+  channelLogo: "",
+  channelId: ""
 };
 
 export default function ProductForm() {
@@ -168,13 +171,42 @@ export default function ProductForm() {
         
         console.log("Channel logo URL:", channelLogo);
         
+        // შევინახოთ არხის ლოგო ცალკე კოლექციაში, თუ მომხმარებელი ავტორიზებულია
+        if (channelLogo && user && channelId) {
+          try {
+            // ჯერ შევინახოთ ლოგო სტორიჯში
+            const storedLogoUrl = await downloadAndStoreChannelLogo(
+              channelLogo,
+              user.id,
+              channelId
+            );
+            
+            // შემდეგ შევინახოთ ინფორმაცია Firestore-ში
+            await saveChannelLogo(
+              channelId,
+              channel.snippet.title,
+              storedLogoUrl,
+              'YouTube'
+            );
+            
+            // განვაახლოთ ლოგოს URL ჩვენს ლოკალურ მდგომარეობაში
+            channelLogo = storedLogoUrl;
+            
+            console.log("Saved channel logo to separate collection");
+          } catch (err) {
+            console.error("Error saving channel logo:", err);
+            // თუ შეცდომაა, ვიყენებთ ორიგინალ URL-ს - არაფერი არ იცვლება
+          }
+        }
+        
         // Fill form data
         setFormData(prev => ({
           ...prev,
           displayName: channel.snippet.title || "",
           // Process subscriber count as a number
           subscribers: parseInt(channel.statistics.subscriberCount) || 0,
-          channelLogo: channelLogo // შევინახოთ არხის ლოგოს URL
+          channelLogo: channelLogo, // შევინახოთ არხის ლოგოს URL
+          channelId: channelId // დავამატოთ არხის ID ფორმის მონაცემებში
         }));
         
         // Mark that the channel has been found and is valid
@@ -602,7 +634,8 @@ $${formData.expenses} — expense (month)`;
         monetizationEnabled: formData.monetizationEnabled,
         imageUrls: imageUrls,
         verificationCode: uuidv4().substring(0, 8),
-        channelLogo: formData.channelLogo || ""
+        channelLogo: formData.channelLogo || "",
+        channelId: formData.channelId || null // დავამატოთ არხის ID პროდუქტის მონაცემებში
       };
 
       const docRef = await addDoc(collection(db, "products"), productData);

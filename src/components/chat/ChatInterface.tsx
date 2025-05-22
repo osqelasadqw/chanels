@@ -28,6 +28,7 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
   const [isWalletSubmitted, setIsWalletSubmitted] = useState<boolean>(false);
   const [paymentCompleted, setPaymentCompleted] = useState<boolean>(false);
   const [sellerConfirmed, setSellerConfirmed] = useState<boolean>(false);
+  const [showPaymentDropdown, setShowPaymentDropdown] = useState<boolean>(false);
   
   // ახალი state ცვლადები ადმინის მოწვევისთვის და ტაიმერისთვის
   const [adminEmail, setAdminEmail] = useState<string>("");
@@ -56,6 +57,8 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
     setTimerActive(false);
     setTimerEndDate(null);
     setRemainingTime(null);
+    setWalletAddress("");
+    setShowPaymentDropdown(false);
     
     // გავასუფთავოთ ინტერვალი, თუ ის არსებობს
     if (intervalRef.current) {
@@ -469,30 +472,45 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
                 Please select payment method:
               </div>
               <div className="flex gap-2">
-                <button
-                  onClick={() => setWalletAddress('bitcoin')}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                    walletAddress === 'bitcoin' 
-                      ? 'bg-blue-600 text-white' 
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
-                  Bitcoin
-                </button>
-                <button
-                  onClick={() => setWalletAddress('card')}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                    walletAddress === 'card' 
-                      ? 'bg-blue-600 text-white' 
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
-                  Card
-                </button>
+                <div className="relative w-full payment-dropdown-container">
+                  <button
+                    type="button"
+                    onClick={() => setShowPaymentDropdown(prev => !prev)}
+                    className="w-full px-4 py-2 rounded-lg text-sm font-medium border border-gray-300 focus:border-blue-500 focus:ring focus:ring-blue-200 focus:ring-opacity-50 bg-white text-left flex justify-between items-center"
+                  >
+                    {walletAddress ? (walletAddress === 'bitcoin' ? 'Bitcoin' : 'Card') : 'Select payment method'}
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                    </svg>
+                  </button>
+                  
+                  {showPaymentDropdown && (
+                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10">
+                      <div 
+                        className="px-4 py-2 cursor-pointer hover:bg-blue-50 text-gray-800 text-sm"
+                        onClick={() => {
+                          setWalletAddress('bitcoin');
+                          setShowPaymentDropdown(false);
+                        }}
+                      >
+                        Bitcoin
+                      </div>
+                      <div 
+                        className="px-4 py-2 cursor-pointer hover:bg-blue-50 text-gray-800 text-sm"
+                        onClick={() => {
+                          setWalletAddress('card');
+                          setShowPaymentDropdown(false);
+                        }}
+                      >
+                        Card
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <button
                   onClick={handleSubmitWalletAddress}
                   disabled={!walletAddress || isSubmittingWallet}
-                  className="ml-auto bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-green-700 transition-all"
+                  className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-green-700 transition-all"
                 >
                   {isSubmittingWallet ? (
                     <div className="flex items-center">
@@ -682,30 +700,45 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
                 Please select payment method:
               </div>
               <div className="flex gap-2">
-                <button
-                  onClick={() => setWalletAddress('bitcoin')}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                    walletAddress === 'bitcoin' 
-                      ? 'bg-blue-600 text-white' 
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
-                  Bitcoin
-                </button>
-                <button
-                  onClick={() => setWalletAddress('card')}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                    walletAddress === 'card' 
-                      ? 'bg-blue-600 text-white' 
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
-                  Card
-                </button>
+                <div className="relative w-full payment-dropdown-container">
+                  <button
+                    type="button"
+                    onClick={() => setShowPaymentDropdown(prev => !prev)}
+                    className="w-full px-4 py-2 rounded-lg text-sm font-medium border border-gray-300 focus:border-blue-500 focus:ring focus:ring-blue-200 focus:ring-opacity-50 bg-white text-left flex justify-between items-center"
+                  >
+                    {walletAddress ? (walletAddress === 'bitcoin' ? 'Bitcoin' : 'Card') : 'Select payment method'}
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                    </svg>
+                  </button>
+                  
+                  {showPaymentDropdown && (
+                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10">
+                      <div 
+                        className="px-4 py-2 cursor-pointer hover:bg-blue-50 text-gray-800 text-sm"
+                        onClick={() => {
+                          setWalletAddress('bitcoin');
+                          setShowPaymentDropdown(false);
+                        }}
+                      >
+                        Bitcoin
+                      </div>
+                      <div 
+                        className="px-4 py-2 cursor-pointer hover:bg-blue-50 text-gray-800 text-sm"
+                        onClick={() => {
+                          setWalletAddress('card');
+                          setShowPaymentDropdown(false);
+                        }}
+                      >
+                        Card
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <button
                   onClick={handleSubmitWalletAddress}
                   disabled={!walletAddress || isSubmittingWallet}
-                  className="ml-auto bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-green-700 transition-all"
+                  className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-green-700 transition-all"
                 >
                   {isSubmittingWallet ? (
                     <div className="flex items-center">
@@ -1487,6 +1520,28 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
       };
     }
   }, [transferTimerStarted, transferReadyTime]);
+
+  // ეფექტი ჩამოსაშლელი მენიუს დასახურად გადახდის მეთოდის არჩევისას
+  useEffect(() => {
+    if (walletAddress) {
+      setShowPaymentDropdown(false);
+    }
+  }, [walletAddress]);
+
+  // ეფექტი ჩამოსაშლელი მენიუს დასახურად გარე კლიკზე
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (showPaymentDropdown && !target.closest('.payment-dropdown-container')) {
+        setShowPaymentDropdown(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showPaymentDropdown]);
 
   return (
     <div className="flex flex-col w-full h-full overflow-hidden">
