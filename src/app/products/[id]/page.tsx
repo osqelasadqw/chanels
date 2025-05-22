@@ -592,8 +592,8 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
                     !youtubeDataLoaded 
                       ? 'border-gray-300 bg-gray-100 text-gray-400 cursor-not-allowed'
                       : isFavorite 
-                        ? 'bg-pink-500 text-white border-pink-500 hover:bg-pink-600' 
-                        : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                      ? 'bg-pink-500 text-white border-pink-500 hover:bg-pink-600' 
+                      : 'border-gray-300 text-gray-700 hover:bg-gray-50'
                   }`}
                 >
                   {favoriteLoading ? 'Updating...' : !youtubeDataLoaded ? 'Loading...' : isFavorite ? 'Remove from Favorites' : 'Add to Favorites'}

@@ -50,6 +50,19 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
     setLoading(true);
     setError(null);
 
+    // გავასუფთავოთ წინა ჩატის მდგომარეობა, როდესაც ახალ ჩატზე გადავდივართ
+    setTransferTimerStarted(false);
+    setTransferReadyTime(null);
+    setTimerActive(false);
+    setTimerEndDate(null);
+    setRemainingTime(null);
+    
+    // გავასუფთავოთ ინტერვალი, თუ ის არსებობს
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+
     if (typeof window !== 'undefined') {
       localStorage.setItem('lastChatId', chatId);
     }
@@ -191,11 +204,14 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
       // Check if this is an escrow request message
       const isEscrowRequest = newMessage.trim().includes("🔒 Request to Purchase");
       
+      // გადავამოწმოთ რომ მომხმარებლის ფოტოს URL სწორია და არის სტრინგი
+      const photoURL = typeof user.photoURL === 'string' ? user.photoURL : null;
+      
       await push(messagesRef, {
         text: newMessage.trim(),
         senderId: user.id,
         senderName: user.name,
-        senderPhotoURL: user.photoURL || null, // მომხმარებლის ფოტო, თუ აქვს
+        senderPhotoURL: photoURL, // მომხმარებლის ფოტო, თუ აქვს
         timestamp: timestamp,
         isAdmin: user.isAdmin,
         // If this is an escrow message, we'll use the special formatting
@@ -421,7 +437,6 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
             <div className="font-medium text-blue-800 mb-1">Transaction status:</div>
             {paymentCompleted ? (
               <p className="text-green-700">
-                ✅ Payment confirmed.
                 The seller has been notified and is now required to provide the agreed login details.
                 If the seller fails to deliver or violates the terms, you can request assistance from the escrow agent using the button below.
               </p>
@@ -543,7 +558,7 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 mr-2 text-green-500">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
-                <span className="font-medium">Payment has been confirmed! The seller has been notified.</span>
+                <span className="font-medium">Payment completed. The seller has been notified.</span>
               </div>
             </div>
           )}
@@ -635,7 +650,6 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
             <div className="font-medium text-blue-800 mb-1">Transaction status:</div>
             {paymentCompleted ? (
               <p className="text-green-700">
-                ✅ Payment confirmed.
                 The seller has been notified and is now required to provide the agreed login details.
                 If the seller fails to deliver or violates the terms, you can request assistance from the escrow agent using the button below.
               </p>
@@ -757,7 +771,7 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 mr-2 text-green-500">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
-                <span className="font-medium">Payment has been confirmed! The seller has been notified.</span>
+                <span className="font-medium">Payment completed. The seller has been notified.</span>
               </div>
             </div>
           )}
@@ -777,7 +791,15 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
                 alt="Escrow Agent"
                 width={48}
                 height={48}
-                className="h-full w-full object-contain p-0"
+                className="h-full w-full object-cover p-0"
+                priority
+                onError={(e) => {
+                  // თუ სურათის ჩატვირთვა ვერ მოხერხდა, ჩავანაცვლოთ სტანდარტული ავატარით
+                  const target = e.target as HTMLImageElement;
+                  target.onerror = null;
+                  target.src = '/agent.png';
+                }}
+                unoptimized
               />
             ) : message.senderPhotoURL ? (
               // ჩვეულებრივი მომხმარებლის ან სისტემური შეტყობინების ფოტო, თუ არის
@@ -787,6 +809,14 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
                 width={48}
                 height={48}
                 className="h-full w-full object-cover"
+                priority
+                onError={(e) => {
+                  // თუ სურათის ჩატვირთვა ვერ მოხერხდა, ჩავანაცვლოთ სტანდარტული ავატარით
+                  const target = e.target as HTMLImageElement;
+                  target.onerror = null; // თავიდან ავიცილოთ უსასრულო რეკურსია
+                  target.src = '/agent.png';
+                }}
+                unoptimized
               />
             ) : message.isSystem && message.senderName === "System" ? (
               // სისტემური შეტყობინება ფოტოს გარეშე
@@ -848,7 +878,15 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
                 alt="Escrow Agent"
                 width={48}
                 height={48}
-                className="h-full w-full object-contain p-0"
+                className="h-full w-full object-cover p-0"
+                priority
+                onError={(e) => {
+                  // თუ სურათის ჩატვირთვა ვერ მოხერხდა, ჩავანაცვლოთ სტანდარტული ავატარით
+                  const target = e.target as HTMLImageElement;
+                  target.onerror = null;
+                  target.src = '/agent.png';
+                }}
+                unoptimized
               />
             ) : message.senderPhotoURL ? (
               <Image 
@@ -857,6 +895,14 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
                 width={48}
                 height={48}
                 className="h-full w-full object-cover"
+                priority
+                onError={(e) => {
+                  // თუ სურათის ჩატვირთვა ვერ მოხერხდა, ჩავანაცვლოთ სტანდარტული ავატარით
+                  const target = e.target as HTMLImageElement;
+                  target.onerror = null; // თავიდან ავიცილოთ უსასრულო რეკურსია
+                  target.src = '/agent.png';
+                }}
+                unoptimized
               />
             ) : message.isSystem && message.senderName === "System" ? (
               <div className="h-full w-full bg-yellow-500 flex items-center justify-center text-white font-bold">
@@ -875,18 +921,6 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
 
   // ჩატის ინტერფეისში დავამატოთ სისტემური შეტყობინების კომპონენტი
   const PaymentStatusMessage = () => {
-    // თუ საუბარში უკვე არის გადახდის დადასტურების შეტყობინება, აღარ ვაჩენებთ დამატებით შეტყობინებას
-    const paymentConfirmationExists = messages.some(msg => msg.isPaymentConfirmation);
-    
-    // თუ ნაპოვნია გადახდის დადასტურების შეტყობინება, მაგრამ paymentCompleted ფლაგი არ არის ჩართული,
-    // ავტომატურად ვანიჭებთ მას true მნიშვნელობას, რომ UI-ს სხვა ნაწილებიც შესაბამისად განახლდეს
-    useEffect(() => {
-      if (paymentConfirmationExists && !paymentCompleted) {
-        setPaymentCompleted(true);
-        console.log("Payment confirmed based on payment confirmation message");
-      }
-    }, [paymentConfirmationExists]);
-    
     // ყველა შემთხვევაში ვაბრუნებთ null-ს, რათა აღარ გამოჩნდეს გადახდის დადასტურების შეტყობინება
     return null;
   };
@@ -914,67 +948,127 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
 
   // ტაიმერის კომპონენტი
   const TransferTimer = () => {
-    // თუ ტაიმერი არ არის დაწყებული ან დრო არ არის მოცემული, არ ვჩვენებთ
-    if (!transferTimerStarted || !transferReadyTime) return null;
+    // თუ ჩატი არ არის, არ გამოვაჩინოთ ტაიმერი
+    if (!chatData) return null;
     
-    // თუ რჩება ტაიმერის დრო ან გასულია ტაიმერი
-    if (remainingTime) {
+    // გადახდის დადასტურების შემდეგაც გამოვაჩინოთ ტაიმერი
+    if (paymentCompleted) {
+      // თუ ტაიმერი აქტიურია, ვაჩვენოთ ის
+      if (timerActive && timerEndDate && remainingTime) {
       const { days, hours, minutes, seconds } = remainingTime;
       
       if (days === 0 && hours === 0 && minutes === 0 && seconds === 0) {
-        // ტაიმერი დასრულდა
+          // ტაიმერი დასრულდა - მესიჯის ფორმით
         return (
-          <div className="mb-6 p-4 rounded-lg border bg-green-50 border-green-100">
-            <div className="flex items-center mb-2">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6 text-green-600 mr-2">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            <div className="flex justify-start mb-4">
+              <div className="h-12 w-12 rounded-full overflow-hidden mr-2 flex-shrink-0 border border-gray-200 shadow-sm">
+                <div className="h-full w-full bg-yellow-500 flex items-center justify-center text-white font-bold">
+                  S
+                </div>
+              </div>
+              <div className="max-w-[80%] p-3 rounded-lg shadow-sm bg-yellow-50 text-yellow-800 border border-yellow-200 rounded-tl-none">
+                <div className="text-xs font-medium mb-1 text-yellow-600 flex items-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3 mr-1">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
               </svg>
-              <h3 className="font-semibold text-green-800">
+                  System
+                </div>
+                <div className="font-semibold text-green-800 mb-1">
                 Transfer Ready!
-              </h3>
             </div>
-            <p className="text-sm text-green-700">
+                <div className="text-sm">
               The 7-day waiting period has passed. The primary ownership rights can now be transferred.
-            </p>
+                </div>
+                <div className="text-xs mt-1 text-right text-yellow-500">
+                  {new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                </div>
+              </div>
+            </div>
+          );
+        }
+        
+        // აქტიური ტაიმერი გადახდის შემდეგ - მესიჯის ფორმით
+        return (
+          <div className="flex justify-start mb-4">
+            <div className="h-12 w-12 rounded-full overflow-hidden mr-2 flex-shrink-0 border border-gray-200 shadow-sm">
+              <div className="h-full w-full bg-yellow-500 flex items-center justify-center text-white font-bold">
+                S
+              </div>
+            </div>
+            <div className="max-w-[80%] p-3 rounded-lg shadow-sm bg-yellow-50 text-yellow-800 border border-yellow-200 rounded-tl-none">
+              <div className="text-xs font-medium mb-1 text-yellow-600 flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3 mr-1">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+                </svg>
+                System
+              </div>
+              <div className="font-medium mb-2">Account transfer must be completed by:</div>
+              <div className="bg-gray-600 rounded-lg shadow-md p-3 mb-1">
+                <div className="flex justify-between items-center">
+                  <div className="text-center px-2 mx-1">
+                    <div className="text-white text-base font-bold">{days.toString().padStart(2, '0')}</div>
+                    <div className="text-gray-300 text-xs">day</div>
+                  </div>
+                  
+                  <div className="text-center px-2 mx-1">
+                    <div className="text-white text-base font-bold">{hours.toString().padStart(2, '0')}</div>
+                    <div className="text-gray-300 text-xs">hour</div>
+                  </div>
+                  
+                  <div className="text-center px-2 mx-1">
+                    <div className="text-white text-base font-bold">{minutes.toString().padStart(2, '0')}</div>
+                    <div className="text-gray-300 text-xs">min</div>
+                  </div>
+                  
+                  <div className="text-center px-2 mx-1">
+                    <div className="text-white text-base font-bold">{seconds.toString().padStart(2, '0')}</div>
+                    <div className="text-gray-300 text-xs">sec</div>
+                  </div>
+                </div>
+              </div>
+              <p className="text-xs mb-1">
+                After this period, the transaction will be completed and the account will be transferred to the buyer.
+              </p>
+              <div className="text-xs mt-1 text-right text-yellow-500">
+                {new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+              </div>
+            </div>
+          </div>
+        );
+      } else if (!timerActive) {
+        // თუ გადახდა დასრულებულია, მაგრამ ტაიმერი არ არის აქტიური - მესიჯის ფორმით
+        return (
+          <div className="flex justify-start mb-4">
+            <div className="h-12 w-12 rounded-full overflow-hidden mr-2 flex-shrink-0 border border-gray-200 shadow-sm">
+              <div className="h-full w-full bg-yellow-500 flex items-center justify-center text-white font-bold">
+                S
+              </div>
+            </div>
+            <div className="max-w-[80%] p-3 rounded-lg shadow-sm bg-yellow-50 text-yellow-800 border border-yellow-200 rounded-tl-none">
+              <div className="text-xs font-medium mb-1 text-yellow-600 flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3 mr-1">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+                </svg>
+                System
+              </div>
+              <div className="font-semibold text-blue-700 mb-1">
+                Payment Completed
+              </div>
+              <div className="text-sm">
+                Payment has been received and the 7-day account transfer period is starting. The timer will appear here momentarily.
+              </div>
+              <div className="text-xs mt-1 text-right text-yellow-500">
+                {new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+              </div>
+            </div>
           </div>
         );
       }
       
-      // აქტიური ტაიმერი - ფოტოზე მოცემული დიზაინის მიხედვით
-      return (
-        <div className="mb-6">
-          <h3 className="text-gray-700 font-medium mb-2">Transaction must be completed by:</h3>
-          <div className="bg-gray-600 rounded-lg shadow-md p-4">
-            <div className="flex justify-between items-center">
-              <div className="text-center px-3 mx-1">
-                <div className="text-white text-xl font-bold">{days.toString().padStart(2, '0')}</div>
-                <div className="text-gray-300 text-xs">day</div>
-              </div>
-              
-              <div className="text-center px-3 mx-1">
-                <div className="text-white text-xl font-bold">{hours.toString().padStart(2, '0')}</div>
-                <div className="text-gray-300 text-xs">hour</div>
-              </div>
-              
-              <div className="text-center px-3 mx-1">
-                <div className="text-white text-xl font-bold">{minutes.toString().padStart(2, '0')}</div>
-                <div className="text-gray-300 text-xs">min</div>
-              </div>
-              
-              <div className="text-center px-3 mx-1">
-                <div className="text-white text-xl font-bold">{seconds.toString().padStart(2, '0')}</div>
-                <div className="text-gray-300 text-xs">sec</div>
-              </div>
-            </div>
-          </div>
-          <p className="text-xs text-gray-500 mt-2">
-            After this period, the transaction will be completed and the funds will be transferred to the recipient's account.
-          </p>
-        </div>
-      );
+      return null;
     }
     
-    return null;
+    return null; // შევცვალოთ ტაიმერის აქამდე არსებული კოდი, რომ მესიჯის სახით გამოჩნდეს
   };
   
   // ფუნქცია ტაიმერის განახლებისთვის
@@ -1036,20 +1130,80 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
         setTransferReadyTime(chatData.transferReadyTime);
       }
       
-      // ასევე შევამოწმოთ ახალი ტაიმერი (7-დღიანი)
+      // ასევე შევამოწმოთ ახალი ტაიმერი (7-დღიანი) ამ კონკრეტული ჩატისთვის
       if (chatData.timerActive && chatData.timerEndDate) {
         setTimerActive(true);
         setTimerEndDate(chatData.timerEndDate);
+        // გადავუყვანოთ ახალი ტაიმერის მდგომარეობა remainingTime-ში
+        updateTimer(chatData.timerEndDate);
+      } else {
+        setTimerActive(false);
+        setTimerEndDate(null);
       }
     }
   }, [chatData]);
   
+  // ეფექტი გადახდის დასრულების შემდეგ ტაიმერის დასაწყებად
+  useEffect(() => {
+    const startTimerAfterPayment = async () => {
+      // თუ გადახდა დასრულებულია, ჩატის მონაცემები არსებობს, მაგრამ ტაიმერი არ არის აქტიური
+      if (paymentCompleted && chatData && !chatData.timerActive && !timerActive) {
+        console.log("Payment completed, starting timer");
+        try {
+          // დავაყენოთ 7-დღიანი ტაიმერი
+          const sevenDaysInMs = 7 * 24 * 60 * 60 * 1000;
+          const endDate = Date.now() + sevenDaysInMs;
+          
+          // განვაახლოთ ჩატის დოკუმენტი Firestore-ში
+          const chatDocRef = doc(db, "chats", chatId);
+          await updateDoc(chatDocRef, {
+            timerActive: true,
+            timerStartDate: Date.now(),
+            timerEndDate: endDate
+          });
+          
+          console.log("Timer started successfully. Will end at:", new Date(endDate).toLocaleString());
+          
+          // განვაახლოთ ლოკალური მდგომარეობა
+          setTimerActive(true);
+          setTimerEndDate(endDate);
+          updateTimer(endDate);
+        } catch (error) {
+          console.error("Error starting timer after payment:", error);
+        }
+      }
+    };
+    
+    startTimerAfterPayment();
+  }, [paymentCompleted, chatData, chatId, timerActive]);
+  
   // ახალი ტაიმერის განახლება
   useEffect(() => {
+    // მხოლოდ მიმდინარე ჩატის ტაიმერის შემოწმება
     if (timerActive && timerEndDate) {
-      const updateTimer = () => {
+      const updateCurrentChatTimer = () => {
+        updateTimer(timerEndDate);
+      };
+      
+      // დაუყოვნებლივ განახლება
+      updateCurrentChatTimer();
+      
+      // ინტერვალის დაყენება ყოველ წამში ერთხელ
+      intervalRef.current = setInterval(updateCurrentChatTimer, 1000);
+      
+      return () => {
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+      };
+    }
+  }, [timerActive, timerEndDate]);
+  
+  // დავამატოთ ახალი ფუნქცია ტაიმერის დროის განახლებისთვის
+  const updateTimer = (endDate: number) => {
         const now = Date.now();
-        const remainingMs = Math.max(0, timerEndDate - now);
+    const remainingMs = Math.max(0, endDate - now);
         
         if (remainingMs <= 0) {
           // ტაიმერი დასრულდა
@@ -1075,21 +1229,6 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
         
         setRemainingTime({ days, hours, minutes, seconds });
       };
-      
-      // დაუყოვნებლივ განახლება
-      updateTimer();
-      
-      // ინტერვალის დაყენება ყოველ წამში ერთხელ
-      intervalRef.current = setInterval(updateTimer, 1000);
-      
-      return () => {
-        if (intervalRef.current) {
-          clearInterval(intervalRef.current);
-          intervalRef.current = null;
-        }
-      };
-    }
-  }, [timerActive, timerEndDate]);
   
   // ადმინის მეილების მიღების ფუნქცია
   const fetchAdminEmails = async () => {
@@ -1172,9 +1311,8 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
       const data = result.data as { success: boolean, transferReadyTime: number };
       
       if (data.success) {
-        setTransferTimerStarted(true);
-        setTransferReadyTime(data.transferReadyTime);
-        updateRemainingTime(); // დავიწყოთ ტაიმერი დაუყოვნებლივ
+        // ჩატის მონაცემები მოვა ონსნაპშოტიდან, აქ არ ვცვლით ლოკალურ მდგომარეობას
+        console.log("Transfer timer started successfully. Will be ready at:", new Date(data.transferReadyTime).toLocaleString());
       } else {
         throw new Error("Failed to start transfer timer. Please try again.");
       }
@@ -1328,7 +1466,27 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
     );
   };
 
-  // EscrowTimerDisplay აღარ გამოიყენება, რადგან ტაიმერი გამოტანილია როგორც მესიჯი
+  // განვაახლოთ სხვა ტაიმერის განახლების ეფექტიც
+  useEffect(() => {
+    // მხოლოდ მიმდინარე ჩატის ტრანსფერის ტაიმერის შემოწმება
+    if (transferTimerStarted && transferReadyTime) {
+      const updateTransferTimer = () => {
+        updateRemainingTime();
+      };
+      
+      // დაუყოვნებლივ განახლება
+      updateTransferTimer();
+      
+      intervalRef.current = setInterval(updateTransferTimer, 1000);
+      
+      return () => {
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+      };
+    }
+  }, [transferTimerStarted, transferReadyTime]);
 
   return (
     <div className="flex flex-col w-full h-full overflow-hidden">
@@ -1343,82 +1501,96 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
       ) : (
         <>
           <div className="overflow-y-auto flex-1 p-4 pb-4 space-y-4">
-            {/* ტაიმერი აღარ არის აქ */}
-            
-            {/* არსებული ტაიმერის კომპონენტი */}
-             <TransferTimer />
-            
-            {/* გავაუქმოთ ადმინის მოწვევის კომპონენტი აქ */}
-            {/* <AdminInviteComponent /> */}
-            
             {/* დავტოვოთ გადახდის სტატუსის შეტყობინება */}
             <PaymentStatusMessage />
             
-            {/* არსებული მესიჯები */}
+            {/* არსებული მესიჯები - TransferTimer როგორც ცალკე კომპონენტი აღარ გამოვაჩინოთ */}
             {messages.map((message) => (
               <MessageItem key={message.id} message={message} />
             ))}
             
-            {/* ტაიმერი როგორც მესიჯი */}
-            {timerActive && remainingTime && (
-              <div className="flex justify-end mb-4">
-                <div className="max-w-[90%]">
-                  <div className="flex items-start">
-                    <div className="bg-white p-3 rounded-lg shadow-sm border border-indigo-100 flex-1">
-                      <div className="text-sm font-medium mb-1 flex items-center">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4 mr-1 text-indigo-600">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                        <span className="text-indigo-800">System</span>
+            {/* Timer as a system message - instead of a separate component */}
+            {paymentCompleted && timerActive && timerEndDate && remainingTime && (
+              <div className="flex justify-start mb-4">
+                <div className="h-12 w-12 rounded-full overflow-hidden mr-2 flex-shrink-0 border border-gray-200 shadow-sm">
+                  <div className="h-full w-full bg-yellow-500 flex items-center justify-center text-white font-bold">
+                    S
+                  </div>
+                </div>
+                <div className="max-w-[80%] p-3 rounded-lg shadow-sm bg-yellow-50 text-yellow-800 border border-yellow-200 rounded-tl-none">
+                  <div className="text-xs font-medium mb-1 text-yellow-600 flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3 mr-1">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+                    </svg>
+                    System
+                  </div>
+                  <div className="font-medium mb-2">Account transfer must be completed by:</div>
+                  <div className="bg-gray-600 rounded-lg shadow-md p-3 mb-1">
+                    <div className="flex justify-between items-center">
+                      <div className="text-center px-2 mx-1">
+                        <div className="text-white text-base font-bold">{remainingTime.days.toString().padStart(2, '0')}</div>
+                        <div className="text-gray-300 text-xs">day</div>
                       </div>
                       
-                      <div className="mb-3">
-                        <h3 className="text-gray-700 font-medium mb-2">Transaction must be completed by:</h3>
-                        <div className="bg-gray-600 rounded-lg shadow-md p-2">
-                          <div className="flex justify-between items-center">
-                            <div className="text-center px-3 mx-1">
-                              <div className="text-white text-xl font-bold">{remainingTime.days.toString().padStart(2, '0')}</div>
-                              <div className="text-gray-300 text-xs">day</div>
-                            </div>
-                            
-                            <div className="text-center px-3 mx-1">
-                              <div className="text-white text-xl font-bold">{remainingTime.hours.toString().padStart(2, '0')}</div>
-                              <div className="text-gray-300 text-xs">hour</div>
-                            </div>
-                            
-                            <div className="text-center px-3 mx-1">
-                              <div className="text-white text-xl font-bold">{remainingTime.minutes.toString().padStart(2, '0')}</div>
-                              <div className="text-gray-300 text-xs">min</div>
-                            </div>
-                            
-                            <div className="text-center px-3 mx-1">
-                              <div className="text-white text-xl font-bold">{remainingTime.seconds.toString().padStart(2, '0')}</div>
-                              <div className="text-gray-300 text-xs">sec</div>
-                            </div>
-                          </div>
-                        </div>
-                        <p className="text-xs text-gray-500 mt-2">
-                          After this period, the transaction will be completed and the funds will be transferred to the recipient's account.
-                        </p>
+                      <div className="text-center px-2 mx-1">
+                        <div className="text-white text-base font-bold">{remainingTime.hours.toString().padStart(2, '0')}</div>
+                        <div className="text-gray-300 text-xs">hour</div>
                       </div>
                       
-                      <div className="text-xs mt-3 text-right text-gray-400">
-                        {new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                      <div className="text-center px-2 mx-1">
+                        <div className="text-white text-base font-bold">{remainingTime.minutes.toString().padStart(2, '0')}</div>
+                        <div className="text-gray-300 text-xs">min</div>
+                      </div>
+                      
+                      <div className="text-center px-2 mx-1">
+                        <div className="text-white text-base font-bold">{remainingTime.seconds.toString().padStart(2, '0')}</div>
+                        <div className="text-gray-300 text-xs">sec</div>
                       </div>
                     </div>
-                    
-                    <div className="h-12 w-12 rounded-full overflow-hidden ml-2 flex-shrink-0 border border-gray-200 shadow-sm">
-                      <div className="h-full w-full bg-gradient-to-br from-indigo-500 to-blue-500 flex items-center justify-center text-white font-medium">
-                        S
-                      </div>
-                    </div>
+                  </div>
+                  <p className="text-xs mb-1">
+                    After this period, the transaction will be completed and the account will be transferred to the buyer.
+                  </p>
+                  <div className="text-xs mt-1 text-right text-yellow-500">
+                    {new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                   </div>
                 </div>
               </div>
             )}
             
+            {/* Timer ended message */}
+            {paymentCompleted && timerActive && timerEndDate && remainingTime && 
+             remainingTime.days === 0 && remainingTime.hours === 0 && remainingTime.minutes === 0 && remainingTime.seconds === 0 && (
+              <div className="flex justify-start mb-4">
+                <div className="h-12 w-12 rounded-full overflow-hidden mr-2 flex-shrink-0 border border-gray-200 shadow-sm">
+                  <div className="h-full w-full bg-yellow-500 flex items-center justify-center text-white font-bold">
+                    S
+                  </div>
+                </div>
+                <div className="max-w-[80%] p-3 rounded-lg shadow-sm bg-yellow-50 text-yellow-800 border border-yellow-200 rounded-tl-none">
+                  <div className="text-xs font-medium mb-1 text-yellow-600 flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3 mr-1">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+                    </svg>
+                    System
+                  </div>
+                  <div className="font-semibold text-green-800 mb-1">
+                    Transfer Ready!
+                  </div>
+                  <div className="text-sm">
+                    The 7-day waiting period has passed. The primary ownership rights can now be transferred.
+                  </div>
+                  <div className="text-xs mt-1 text-right text-yellow-500">
+                    {new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Payment completed but timer not active message - ამ შეტყობინებასაც ვშლი */}
+            
             {/* ადმინის მოწვევის მესიჯი ჩატში - მესიჯების შემდეგ */}
-            {paymentCompleted && chatData && user && (function() {
+            {paymentCompleted && chatData && user && ((function() {
               // გამყიდველის იდენტიფიკაცია (იგივე ლოგიკა რაც ადრინდელ AdminInviteComponent-ში)
               const participants = chatData.participants || [];
               let sellerId = chatData.sellerId;
@@ -1536,7 +1708,7 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
                 );
               }
               return null;
-            })()}
+            })())}
             
             <div ref={messagesEndRef} />
           </div>
