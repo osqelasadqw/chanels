@@ -17,12 +17,15 @@ export default function EscrowChatList({ onChatSelect, selectedChatId }: { onCha
   // const [hidingChatId, setHidingChatId] = useState<string | null>(null);
   const { user } = useAuth();
 
-  // Admin ID -  TODO: This should be fetched from a secure config or environment variable
-  const ADMIN_ID = "ADMIN_USER_ID";
-
   useEffect(() => {
     if (!user || !user.isAdmin) {
       setError("Access denied. You must be an admin.");
+      setLoading(false);
+      return;
+    }
+
+    if (!user.id) {
+      setError("User ID not found.");
       setLoading(false);
       return;
     }
@@ -33,8 +36,8 @@ export default function EscrowChatList({ onChatSelect, selectedChatId }: { onCha
     // Get escrow chats where the admin is a participant and isEscrowChat is true
     const chatsQuery = query(
       collection(db, "chats"),
-      where("participants", "array-contains", ADMIN_ID),
-      where("isEscrowChat", "==", true) // Filter for escrow chats
+      where("participants", "array-contains", user.id),
+      where("isPrivateWithAdmin", "==", true) // Filter for escrow chats
     );
 
     const unsubscribe = onSnapshot(
@@ -59,7 +62,7 @@ export default function EscrowChatList({ onChatSelect, selectedChatId }: { onCha
     );
 
     return () => unsubscribe();
-  }, [user, ADMIN_ID]);
+  }, [user]);
 
   if (loading) {
     return (
@@ -101,7 +104,7 @@ export default function EscrowChatList({ onChatSelect, selectedChatId }: { onCha
       {chats.map((chat) => {
         // In escrow chats, one participant is the user, the other is the admin.
         // We want to display the user\'s information.
-        const userParticipantId = chat.participants.find(id => id !== ADMIN_ID);
+        const userParticipantId = chat.participants.find(id => id !== user.id);
         
         const participantNames = chat.participantNames || {};
         const participantPhotos = chat.participantPhotos || {};
