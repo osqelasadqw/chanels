@@ -151,7 +151,7 @@ export default function ContactPage({ params }: ContactPageProps) {
         const messageData = {
           text: `
 Transaction status:
-The terms of the transaction were confirmed. When you send your payment, the seller will be notified, and will need to transfer the account login details based on the agreed upon terms. If the seller does not respond, or breaks the rules, you can call upon the escrow agent (button below).
+The terms of the transaction have been confirmed. Once the payment is made by either party (as agreed), the other side will be notified and expected to proceed with the next step — including transferring the account credentials in line with the agreed terms. If either party fails to respond or violates the agreement, the escrow agent can be called in using the button below.
 
 Transaction ID: ${transactionId}
 Transaction Amount: $${product.price}

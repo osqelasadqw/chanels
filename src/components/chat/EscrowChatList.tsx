@@ -34,34 +34,59 @@ export default function EscrowChatList({ onChatSelect, selectedChatId }: { onCha
     setError(null);
 
     // Get escrow chats where the admin is a participant and isEscrowChat is true
-    const chatsQuery = query(
-      collection(db, "chats"),
-      where("participants", "array-contains", user.id),
-      where("isPrivateWithAdmin", "==", true) // Filter for escrow chats
-    );
+    // Use OR query with array of constraints for multiple conditions
+    const privateChatQueries = [
+      query(
+        collection(db, "chats"),
+        where("participants", "array-contains", user.id),
+        where("isPrivateWithAdmin", "==", true)
+      ),
+      query(
+        collection(db, "chats"),
+        where("participants", "array-contains", user.id),
+        where("isPrivateEscrowChat", "==", true)
+      )
+    ];
 
-    const unsubscribe = onSnapshot(
-      chatsQuery,
-      (snapshot) => {
-        const chatList = snapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data()
-        } as Chat));
-        
-        // Sort by createdAt in descending order (newest first)
-        chatList.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-        
-        setChats(chatList);
-        setLoading(false);
-      },
-      (err) => {
-        console.error("Error fetching escrow chats:", err);
-        setError("Failed to load escrow chats");
-        setLoading(false);
-      }
-    );
+    // Array to store the unsubscribe functions for each query
+    const unsubscribes: (() => void)[] = [];
+    const allChats: Chat[] = [];
 
-    return () => unsubscribe();
+    // Subscribe to each query and merge results
+    privateChatQueries.forEach((chatQuery, index) => {
+      const unsubscribe = onSnapshot(
+        chatQuery,
+        (snapshot) => {
+          snapshot.docs.forEach(doc => {
+            // Check if chat already exists in the array (avoid duplicates)
+            const exists = allChats.some(chat => chat.id === doc.id);
+            if (!exists) {
+              allChats.push({
+                id: doc.id,
+                ...doc.data()
+              } as Chat);
+            }
+          });
+          
+          // Sort and update state after each snapshot
+          allChats.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+          setChats([...allChats]);
+          setLoading(false);
+        },
+        (err) => {
+          console.error(`Error fetching private chats (query ${index}):`, err);
+          setError("Failed to load private chats");
+          setLoading(false);
+        }
+      );
+      
+      unsubscribes.push(unsubscribe);
+    });
+
+    return () => {
+      // Clean up all subscriptions
+      unsubscribes.forEach(unsubscribe => unsubscribe());
+    };
   }, [user]);
 
   if (loading) {
@@ -104,7 +129,7 @@ export default function EscrowChatList({ onChatSelect, selectedChatId }: { onCha
       {chats.map((chat) => {
         // In escrow chats, one participant is the user, the other is the admin.
         // We want to display the user\'s information.
-        const userParticipantId = chat.participants.find(id => id !== user.id);
+        const userParticipantId = chat.participants?.find(id => id !== user?.id) || "";
         
         const participantNames = chat.participantNames || {};
         const participantPhotos = chat.participantPhotos || {};
@@ -132,6 +157,12 @@ export default function EscrowChatList({ onChatSelect, selectedChatId }: { onCha
         };
 
         const isSelected = selectedChatId === chat.id;
+        
+        // Determine chat type for display
+        const isPrivateEscrowChat = chat.isPrivateEscrowChat === true;
+        const chatTypeLabel = isPrivateEscrowChat 
+          ? "Private Support" 
+          : "Escrow Service";
 
         return (
           <div key={chat.id} className={`relative group ${isSelected ? 'bg-indigo-50' : ''}`}>
@@ -154,7 +185,13 @@ export default function EscrowChatList({ onChatSelect, selectedChatId }: { onCha
                     {requestingUserName.charAt(0).toUpperCase()}
                   </div>
                 )}
-                {/* Online status indicator could be added if needed */}
+                {/* Chat type indicator badge */}
+                <div className={`absolute -bottom-1 -right-1 px-1.5 py-0.5 text-[9px] font-semibold rounded-full
+                  ${isPrivateEscrowChat 
+                    ? 'bg-red-500 text-white' 
+                    : 'bg-green-500 text-white'}`}>
+                  {isPrivateEscrowChat ? 'URGENT' : 'ESCROW'}
+                </div>
               </div>
               
               <div className="flex-1 min-w-0">
@@ -162,14 +199,22 @@ export default function EscrowChatList({ onChatSelect, selectedChatId }: { onCha
                   <h3 className={`font-medium truncate ${isSelected ? 'text-indigo-700' : 'text-gray-800'}`}>
                     {requestingUserName}
                   </h3>
-                  <span className={`text-xs ${isSelected ? 'text-indigo-500' : 'text-gray-500'}`}>
+                  <span className={`text-xs ml-2 flex-shrink-0 w-auto ${isSelected ? 'text-indigo-500' : 'text-gray-500'}`}>
                     {getMessageTime()}
                   </span>
                 </div>
                 
-                <p className={`text-sm truncate ${isSelected ? 'text-indigo-700' : 'text-gray-600'}`}>
-                  {chat.lastMessage ? chat.lastMessage.text : "Escrow chat initiated"}
-                </p>
+                <div className="flex items-center">
+                  <span className={`inline-block mr-1.5 px-1.5 py-0.5 text-[9px] font-semibold rounded-full
+                    ${isPrivateEscrowChat 
+                      ? 'bg-red-100 text-red-700' 
+                      : 'bg-green-100 text-green-700'}`}>
+                    {chatTypeLabel}
+                  </span>
+                  <p className={`text-sm truncate ${isSelected ? 'text-indigo-700' : 'text-gray-600'}`}>
+                    {chat.lastMessage ? chat.lastMessage.text : "Escrow chat initiated"}
+                  </p>
+                </div>
                 {chat.productId && (
                   <p className="text-xs text-gray-500 mt-1">
                     Product ID: {' '}

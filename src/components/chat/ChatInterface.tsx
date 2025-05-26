@@ -9,6 +9,7 @@ import { ref, push, onValue, off } from "firebase/database";
 import { doc, getDoc, updateDoc, onSnapshot } from "firebase/firestore";
 import { addDoc, collection } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
+import React from "react";
 
 interface ChatInterfaceProps {
   chatId: string;
@@ -19,7 +20,7 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown | null>(null);
   const [chatData, setChatData] = useState<Chat | null>(null);
   const { user } = useAuth();
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -29,12 +30,12 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
   const [paymentCompleted, setPaymentCompleted] = useState<boolean>(false);
   const [sellerConfirmed, setSellerConfirmed] = useState<boolean>(false);
   const [showPaymentDropdown, setShowPaymentDropdown] = useState<boolean>(false);
+  const [adminEmailsList, setAdminEmailsList] = useState<string[]>([]); // State for admin emails
+  const [escrowAgentAssigned, setEscrowAgentAssigned] = useState<boolean>(false); // New state
+  const [selectedAgentEmail, setSelectedAgentEmail] = useState<string>("");  // State for selected agent email
+  const [showAgentEmailDropdown, setShowAgentEmailDropdown] = useState<boolean>(false);
   
-  // ახალი state ცვლადები ადმინის მოწვევისთვის და ტაიმერისთვის
-  const [adminEmail, setAdminEmail] = useState<string>("");
-  const [adminEmails, setAdminEmails] = useState<string[]>([]);
-  const [showAdminEmailDropdown, setShowAdminEmailDropdown] = useState<boolean>(false);
-  const [isInvitingAdmin, setIsInvitingAdmin] = useState<boolean>(false);
+  // ტაიმერის სტეიტები
   const [transferTimerStarted, setTransferTimerStarted] = useState<boolean>(false);
   const [transferReadyTime, setTransferReadyTime] = useState<number | null>(null);
   const [remainingTime, setRemainingTime] = useState<{days: number, hours: number, minutes: number, seconds: number} | null>(null);
@@ -43,6 +44,35 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
   // ახალი სტეიტები timerActive-ისთვის და ტაიმერის დროებისთვის
   const [timerActive, setTimerActive] = useState<boolean>(false);
   const [timerEndDate, setTimerEndDate] = useState<number | null>(null);
+
+  // ფუნქცია ტაიმერის განახლებისთვის - მდებარეობს კომპონენტის დასაწყისში, ჰუკების შემდეგ
+  const updateRemainingTime = () => {
+    if (!transferReadyTime) return;
+    
+    const now = Date.now();
+    const remainingMs = Math.max(0, transferReadyTime - now);
+    
+    if (remainingMs <= 0) {
+      setRemainingTime({
+        days: 0,
+        hours: 0,
+        minutes: 0,
+        seconds: 0
+      });
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+      return;
+    }
+    
+    const days = Math.floor(remainingMs / (1000 * 60 * 60 * 24));
+    const hours = Math.floor((remainingMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    const minutes = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
+    const seconds = Math.floor((remainingMs % (1000 * 60)) / 1000);
+    
+    setRemainingTime({ days, hours, minutes, seconds });
+  };
 
   // Fetch chat data and messages
   useEffect(() => {
@@ -82,44 +112,66 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
           
           // Check if seller has confirmed
           setSellerConfirmed(!!data.sellerConfirmed);
-          console.log("Seller confirmed:", !!data.sellerConfirmed);
           
           // Check payment status
           const isPaymentDone = !!data.paymentCompleted;
           setPaymentCompleted(isPaymentDone);
-          console.log("Payment status:", isPaymentDone ? "Completed" : "Not completed");
           
-          // ტაიმერის მონაცემების შემოწმება
-          if (data.timerActive && data.timerEndDate) {
+          // ტაიმერის მონაცემების შემოწმება - ახალი კოდი ტაიმერის სწორად აღმოსაჩენად
+          
+          // შევამოწმოთ როგორც ძველი (timerActive), ასევე ახალი (transferTimerStarted) ფორმატის ტაიმერები
+          if (data.transferTimerStarted && data.transferReadyTime) {
+            setTransferTimerStarted(true);
+            setTransferReadyTime(data.transferReadyTime);
+            setTimerActive(true);
+            setTimerEndDate(data.transferReadyTime);
+          } 
+          else if (data.timerActive && data.timerEndDate) {
             setTimerActive(true);
             setTimerEndDate(data.timerEndDate);
-            console.log("Timer is active, end date:", new Date(data.timerEndDate).toLocaleString());
-          }
-          
-          // Check if chat has lastMessage
-          if (data.lastMessage) {
-            console.log("Last message found in Firestore:", data.lastMessage);
+            // ასევე დავაყენოთ ტრანსფერის ტაიმერის მნიშვნელობებიც თავსებადობისთვის
+            setTransferTimerStarted(true);
+            setTransferReadyTime(data.timerEndDate);
           } else {
-            console.log("No last message found in Firestore");
+            // No active timer found
           }
           
         } else {
           setError("Chat not found");
         }
       } catch (err) {
-        console.error("Error fetching chat data:", err);
         setError("Failed to load chat data");
       }
     };
 
     fetchChatData();
 
+    // Fetch admin emails
+    const fetchAdminEmails = async () => {
+      try {
+        const getEmailsFunction = httpsCallable(functions, 'getAdminEmails');
+        const result = await getEmailsFunction();
+        const data = result.data as { adminEmails: string[] };
+        if (data && data.adminEmails) {
+          setAdminEmailsList(data.adminEmails);
+        } else {
+          setAdminEmailsList([]); // Set to empty if no emails or error
+        }
+      } catch (err) {
+        // Optionally set an error state here if needed for UI
+        setAdminEmailsList([]); // Set to empty on error
+      }
+    };
+
+    if (user) { // Fetch emails only if user is available
+      fetchAdminEmails();
+    }
+
     // Listen for messages from Realtime Database
     const messagesRef = ref(rtdb, `messages/${chatId}`);
     
     onValue(messagesRef, (snapshot) => {
       const data = snapshot.val();
-      console.log("Firebase RTD Data:", data);
       if (data) {
         const messageList = Object.entries(data).map(([key, value]) => ({
           id: key,
@@ -129,14 +181,12 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
         // Sort messages by timestamp
         messageList.sort((a, b) => a.timestamp - b.timestamp);
         
-        console.log("Parsed messages:", messageList);
         setMessages(messageList);
         
         // შევამოწმოთ გადახდის დადასტურების შეტყობინება
         const paymentConfirmationMessage = messageList.find(msg => msg.isPaymentConfirmation);
         if (paymentConfirmationMessage) {
           setPaymentCompleted(true);
-          console.log("Payment confirmation message found:", paymentConfirmationMessage);
           
           // ასევე შეიძლება ვცადოთ Firestore-ში ვეძებოთ გადახდის სტატუსი თუ რეალურ დროში არ მოგვაქვს
           // ეს საშუალებას გვაძლევს დავინახოთ გადახდის სტატუსის ცვლილები მყისიერად
@@ -148,7 +198,6 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
       }
       setLoading(false);
     }, (err) => {
-      console.error("Error fetching messages:", err);
       setError("Failed to load messages");
       setLoading(false);
     });
@@ -159,7 +208,6 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
     const unsubscribeChatDocListener = onSnapshot(chatDocRef, (chatDocSnapshot) => {
       if (chatDocSnapshot.exists()) {
         const updatedChatData = chatDocSnapshot.data() as Chat;
-        console.log("Chat document updated (realtime):", updatedChatData);
         
         // განვაახლოთ ჩატის მონაცემები state-ში
         setChatData(updatedChatData);
@@ -167,13 +215,11 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
         // შევამოწმოთ გადახდის სტატუსი
         if (updatedChatData.paymentCompleted) {
           setPaymentCompleted(true);
-          console.log("Payment status updated to completed from realtime Firestore");
         }
         
         // შევამოწმოთ გამყიდველის დადასტურების სტატუსი და განვაახლოთ
         if (updatedChatData.sellerConfirmed) {
           setSellerConfirmed(true);
-          console.log("Seller confirmation updated to true from realtime Firestore");
         }
       }
     });
@@ -191,7 +237,7 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
   }, [messages]);
 
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   };
 
   const handleSendMessage = async (e: React.FormEvent) => {
@@ -232,14 +278,12 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
             senderId: user.id
           }
         });
-        console.log("Chat lastMessage updated");
       } catch (err) {
-        console.error("Error updating chat lastMessage:", err);
+        // Error updating chat lastMessage
       }
       
       setNewMessage("");
     } catch (err) {
-      console.error("Error sending message:", err);
       setError("Failed to send message");
     }
   };
@@ -248,9 +292,6 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
     if (!user || !chatId) return;
 
     try {
-      // ლოგი
-      console.log("Sending admin request for chat:", chatId);
-      
       const adminRequestsRef = ref(rtdb, `adminRequests`);
       
       // Generate a unique ID for this request
@@ -264,8 +305,6 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
         timestamp: requestTimestamp
       };
       
-      console.log("Request data:", requestData);
-      
       // გაგზავნა
       await push(adminRequestsRef, requestData);
       
@@ -273,7 +312,6 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
       alert("Escrow agent request sent successfully!");
       
     } catch (err) {
-      console.error("Error requesting admin:", err);
       setError("Failed to request admin");
       alert("Failed to request escrow agent. Please try again.");
     }
@@ -285,8 +323,6 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
 
     setIsSubmittingWallet(true);
     try {
-      console.log("Processing payment with method:", walletAddress);
-      
       if (walletAddress === 'bitcoin') {
         // Bitcoin გადახდის ლოგიკა
         // Create a notification for the admin
@@ -316,11 +352,9 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
 
           // მივიღოთ current window საიტის origin-ი
           const origin = window.location.origin;
-          console.log("Current origin:", origin);
 
           // სწორი URL-ი HTTPS პროტოკოლით
           const functionUrl = 'https://us-central1-projec-cca43.cloudfunctions.net/createPaymentSessionHttp';
-          console.log("Calling function at:", functionUrl);
 
           // fetch-ის გამოყენებით გამოვიძახოთ HTTP ფუნქცია
           const response = await fetch(functionUrl, {
@@ -339,12 +373,10 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
           
           if (!response.ok) {
             const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-            console.error('Payment API error:', errorData);
             throw new Error(`HTTP error! status: ${response.status}, message: ${errorData.error || 'Unknown error'}`);
           }
           
           const data = await response.json();
-          console.log("Payment session created successfully:", data);
           
           if (!data.url) {
             throw new Error('No checkout URL returned from server');
@@ -354,8 +386,6 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
           window.location.href = data.url;
           return; // ვწყვეტთ ფუნქციას, რადგან Stripe checkout გვერდზე გადადის
         } catch (fetchError) {
-          console.error("Fetch error:", fetchError);
-            
             // დავამატოთ შეტყობინების ჩვენება
           const errorMessage = fetchError instanceof Error ? fetchError.message : 'Unknown error';
             alert(`Failed to initiate credit card payment: ${errorMessage}. Please try again.`);
@@ -365,8 +395,6 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
         }
       }
     } catch (error) {
-      console.error("Error processing payment:", error);
-      
       // დავამატოთ შეტყობინების ჩვენება
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       alert(`Failed to process payment: ${errorMessage}. Please try again later.`);
@@ -374,6 +402,112 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
       setIsSubmittingWallet(false);
     } finally {
       setIsSubmittingWallet(false);
+    }
+  };
+
+  // Function to handle assigning manager rights to escrow agent
+  const handleAssignManagerRights = async () => {
+    if (!user || !chatId || !chatData?.sellerId || user.id !== chatData.sellerId) {
+      setError("Only the seller can assign manager rights.");
+      return;
+    }
+    
+    const adminEmail = selectedAgentEmail.trim();
+
+    if (!adminEmail) {
+      alert("Please select or enter an escrow agent's email.");
+      return;
+    }
+
+    try {
+      const assignRightsFunction = httpsCallable(functions, 'assignManagerRightsToAdmin');
+      await assignRightsFunction({ chatId, adminEmail });
+      
+      setEscrowAgentAssigned(true); // Update state to hide the button
+      // Optionally, update chatData locally or rely on Firestore listener
+      alert(`Manager rights assigned to ${adminEmail}. The admin has been notified.`);
+
+    } catch (err) {
+      const httpsError = err as any; 
+      if (httpsError.code && httpsError.message) {
+        setError(`Error: ${httpsError.message} (code: ${httpsError.code})`);
+      } else {
+        setError("Failed to assign manager rights. Please try again.");
+      }
+      alert(`Failed to assign manager rights: ${err instanceof Error ? err.message : "Unknown error"}`);
+    }
+  };
+
+  // განახლებული ფუნქცია აგენტთან კონტაქტისთვის
+  const handleContactEscrowAgent = async () => {
+    if (!user) return;
+    
+    try {
+      // პირდაპირ შევქმნათ ახალი ჩატი Firebase-ში
+      const newChatRef = collection(db, "chats");
+      const now = Date.now();
+      
+      // მოვძებნოთ აგენტის ელფოსტა
+      let agentEmail = adminEmailsList.length > 0 ? adminEmailsList[0] : null;
+      
+      if (!agentEmail) {
+        alert("No escrow agents found. Please contact support directly.");
+        return;
+      }
+      
+      // მოვძებნოთ პროდუქტის სახელი, თუ პროდუქტი ხელმისაწვდომია
+      let productName = "Unknown Product";
+      if (productId) {
+        try {
+          const productDocRef = doc(db, "products", productId);
+          const productDoc = await getDoc(productDocRef);
+          if (productDoc.exists()) {
+            productName = productDoc.data().displayName || productDoc.data().name || "Unknown Product";
+          }
+        } catch (err) {
+          console.error("Error fetching product details:", err);
+        }
+      }
+      
+      // შევქმნათ ახალი ჩატის დოკუმენტი
+      const newChatData = {
+        createdAt: now,
+        updatedAt: now,
+        participants: [user.id, agentEmail],
+        participantNames: {
+          [user.id]: user.name || user.email || "User",
+          [agentEmail]: "Escrow Agent"
+        },
+        isPrivateEscrowChat: true,
+        originalChatId: chatId,
+        productId: productId,
+        productName: productName || chatData?.productName || "Unknown Product",
+        lastMessage: {
+          text: "URGENT: I've been tricked/There's a problem with my transaction",
+          timestamp: now,
+          senderId: user.id
+        }
+      };
+      
+      const newChatDoc = await addDoc(newChatRef, newChatData);
+      
+      // გავაგზავნოთ პირველი შეტყობინება ჩატში
+      const messagesRef = ref(rtdb, `messages/${newChatDoc.id}`);
+      await push(messagesRef, {
+        text: `I need help with my transaction. Issue: "I've been tricked/There's a problem" in chat: ${chatId} for product: ${productName || chatData?.productName || "Unknown Product"}`,
+        senderId: user.id,
+        senderName: user.name || user.email || "User",
+        senderPhotoURL: user.photoURL,
+        timestamp: now,
+        isSystem: false
+      });
+      
+      // გადავამისამართოთ ახალ ჩატზე
+      window.location.href = `/chats/${newChatDoc.id}`;
+      
+    } catch (error) {
+      console.error("Error creating chat:", error);
+      alert(`Failed to contact escrow agent. Please try again or contact support directly.`);
     }
   };
 
@@ -406,9 +540,11 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
               </div>
               <div className="flex flex-col">
                 <span className="font-medium">Transfer to: <span className="font-normal">{
-                  message.text && message.text.includes("Transfer to:") 
-                    ? message.text.split("Transfer to:")[1].split("\n")[0].trim()
-                    : "seller@example.com"
+                  chatData?.sellerId && user?.email !== chatData?.participantNames?.[chatData.sellerId] 
+                    ? chatData?.participantNames?.[chatData.sellerId]
+                    : message.text && message.text.includes("Transfer to:") 
+                      ? message.text.split("Transfer to:")[1].split("\n")[0].trim()
+                      : chatData?.participantNames && Object.values(chatData.participantNames)[0] || "seller"
                 }</span></span>
               </div>
             </div>
@@ -440,11 +576,13 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
             <div className="font-medium text-blue-800 mb-1">Transaction status:</div>
             {paymentCompleted ? (
               <p className="text-green-700">
-                The seller has been notified and is now required to provide the agreed login details.
-                If the seller fails to deliver or violates the terms, you can request assistance from the escrow agent using the button below.
+                {isSeller ? 
+                  "The buyer has paid. Now, you need to designate the escrow agent's account as manager. The escrow agent's email is indicated below. If you don't have a button for transferring administrative rights, that means you have not yet linked the channel with the brand's account. Follow these instructions in order to link your account. You have 23:59:30 to do this, after which we will offer the buyer a refund." :
+                  "You've paid, and we've notified the seller. We're waiting for the seller to designate the escrow agent as manager. The seller has 23:56:08 left to do this, after which we will offer you a refund"
+                }
               </p>
             ) : sellerConfirmed ? (
-              <p className="text-blue-700">The terms of the transaction were confirmed. When you send your payment, the seller will be notified, and will need to transfer the account login details based on the agreed upon terms. If the seller does not respond, of breaks the rules, you can call upon the escrow agent (button below).</p>
+              <p className="text-blue-700">The terms of the transaction have been confirmed. Once the payment is made by either party (as agreed), the other side will be notified and expected to proceed with the next step — including transferring the account credentials in line with the agreed terms. If either party fails to respond or violates the agreement, the escrow agent can be called in using the button below.</p>
             ) : (
               <p className="text-blue-700">Waiting for seller to agree to the terms of the transaction.</p>
             )}
@@ -465,18 +603,19 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
             </div>
           )}
           
-          {/* Input form for payment method selection - visible only if seller confirmed, payment is not completed and user is buyer */}
-          {!paymentCompleted && !isSeller && sellerConfirmed && !isWalletSubmitted && (
+          {/* Input form for payment method selection - visible for both buyer and seller if seller confirmed */}
+          {!paymentCompleted && sellerConfirmed && !isWalletSubmitted && (
             <div className="mt-4 border-t border-gray-200 pt-4">
               <div className="mb-2 text-sm font-semibold text-gray-700">
                 Please select payment method:
               </div>
               <div className="flex gap-2">
-                <div className="relative w-full payment-dropdown-container">
+                {/* აქ payment-dropdown-container კლასი გადავიტანეთ უშუალოდ ღილაკის მშობელ div-ზე */}
+                <div className="relative w-full payment-dropdown-container"> 
                   <button
                     type="button"
                     onClick={() => setShowPaymentDropdown(prev => !prev)}
-                    className="w-full px-4 py-2 rounded-lg text-sm font-medium border border-gray-300 focus:border-blue-500 focus:ring focus:ring-blue-200 focus:ring-opacity-50 bg-white text-left flex justify-between items-center"
+                    className={`w-full px-4 py-2 text-sm font-medium border border-gray-300 focus:border-blue-500 focus:ring focus:ring-blue-200 focus:ring-opacity-50 bg-white text-left flex justify-between items-center ${showPaymentDropdown ? 'rounded-t-lg rounded-b-none' : 'rounded-lg'}`}
                   >
                     {walletAddress ? (walletAddress === 'bitcoin' ? 'Bitcoin' : 'Card') : 'Select payment method'}
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
@@ -485,17 +624,9 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
                   </button>
                   
                   {showPaymentDropdown && (
-                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10">
-                      <div 
-                        className="px-4 py-2 cursor-pointer hover:bg-blue-50 text-gray-800 text-sm"
-                        onClick={() => {
-                          setWalletAddress('bitcoin');
-                          setShowPaymentDropdown(false);
-                        }}
-                      >
-                        Bitcoin
-                      </div>
-                      <div 
+                    // აქ top-full უზრუნველყოფს, რომ მენიუ ღილაკის ქვემოთ გამოჩნდეს
+                    <div className="absolute top-full left-0 right-0 -mt-px bg-white border-l border-r border-b border-gray-300 rounded-b-lg rounded-t-none shadow-lg z-10">
+                      <div
                         className="px-4 py-2 cursor-pointer hover:bg-blue-50 text-gray-800 text-sm"
                         onClick={() => {
                           setWalletAddress('card');
@@ -503,6 +634,15 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
                         }}
                       >
                         Card
+                      </div>
+                      <div
+                        className="px-4 py-2 cursor-pointer hover:bg-blue-50 text-gray-800 text-sm"
+                        onClick={() => {
+                          setWalletAddress('bitcoin');
+                          setShowPaymentDropdown(false);
+                        }}
+                      >
+                        Bitcoin
                       </div>
                     </div>
                   )}
@@ -536,7 +676,7 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
                   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 mr-2 text-green-500">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
-                  <span className="font-medium">Payment processing! The seller will be notified soon.</span>
+                  <span className="font-medium">Payment processing! Transaction will be completed soon.</span>
                 </div>
                 <div className="pulse-animation">
                   <div className="w-3 h-3 bg-green-500 rounded-full"></div>
@@ -572,12 +712,16 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
           {/* If payment is completed show confirmation */}
           {paymentCompleted && (
             <div className="mt-4 border-t border-gray-200 pt-4">
+              {/* The following div containing the message will be removed
               <div className="flex items-center bg-green-50 text-green-700 p-3 rounded-lg border border-green-200">
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 mr-2 text-green-500">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
-                <span className="font-medium">Payment completed. The seller has been notified.</span>
+                <span className="font-medium">Payment completed! Transaction process started.</span>
               </div>
+              */}
+              
+              {/* Escrow agent information section is removed from here */}
             </div>
           )}
         </div>
@@ -668,11 +812,13 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
             <div className="font-medium text-blue-800 mb-1">Transaction status:</div>
             {paymentCompleted ? (
               <p className="text-green-700">
-                The seller has been notified and is now required to provide the agreed login details.
-                If the seller fails to deliver or violates the terms, you can request assistance from the escrow agent using the button below.
+                {isSeller ? 
+                  "The buyer has paid. Now, you need to designate the escrow agent's account as manager. The escrow agent's email is indicated below. If you don't have a button for transferring administrative rights, that means you have not yet linked the channel with the brand's account. Follow these instructions in order to link your account. You have 23:59:30 to do this, after which we will offer the buyer a refund." :
+                  "You've paid, and we've notified the seller. We're waiting for the seller to designate the escrow agent as manager. The seller has 23:56:08 left to do this, after which we will offer you a refund"
+                }
               </p>
             ) : sellerConfirmed ? (
-              <p className="text-blue-700">The terms of the transaction were confirmed. When you send your payment, the seller will be notified, and will need to transfer the account login details based on the agreed upon terms. If the seller does not respond, of breaks the rules, you can call upon the escrow agent (button below).</p>
+              <p className="text-blue-700">The terms of the transaction have been confirmed. Once the payment is made by either party (as agreed), the other side will be notified and expected to proceed with the next step — including transferring the account credentials in line with the agreed terms. If either party fails to respond or violates the agreement, the escrow agent can be called in using the button below.</p>
             ) : (
               <p className="text-blue-700">Waiting for seller to agree to the terms of the transaction.</p>
             )}
@@ -694,17 +840,18 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
           )}
           
           {/* Input form for the buyer's payment method selection - only show if payment not completed */}
-          {!paymentCompleted && !isSeller && sellerConfirmed && !isWalletSubmitted && (
+          {!paymentCompleted && sellerConfirmed && !isWalletSubmitted && (
             <div className="mt-4 border-t border-gray-200 pt-4">
               <div className="mb-2 text-sm font-semibold text-gray-700">
                 Please select payment method:
               </div>
               <div className="flex gap-2">
-                <div className="relative w-full payment-dropdown-container">
+                {/* აქ payment-dropdown-container კლასი გადავიტანეთ უშუალოდ ღილაკის მშობელ div-ზე */}
+                <div className="relative w-full payment-dropdown-container"> 
                   <button
                     type="button"
                     onClick={() => setShowPaymentDropdown(prev => !prev)}
-                    className="w-full px-4 py-2 rounded-lg text-sm font-medium border border-gray-300 focus:border-blue-500 focus:ring focus:ring-blue-200 focus:ring-opacity-50 bg-white text-left flex justify-between items-center"
+                    className={`w-full px-4 py-2 text-sm font-medium border border-gray-300 focus:border-blue-500 focus:ring focus:ring-blue-200 focus:ring-opacity-50 bg-white text-left flex justify-between items-center ${showPaymentDropdown ? 'rounded-t-lg rounded-b-none' : 'rounded-lg'}`}
                   >
                     {walletAddress ? (walletAddress === 'bitcoin' ? 'Bitcoin' : 'Card') : 'Select payment method'}
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
@@ -713,17 +860,9 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
                   </button>
                   
                   {showPaymentDropdown && (
-                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10">
-                      <div 
-                        className="px-4 py-2 cursor-pointer hover:bg-blue-50 text-gray-800 text-sm"
-                        onClick={() => {
-                          setWalletAddress('bitcoin');
-                          setShowPaymentDropdown(false);
-                        }}
-                      >
-                        Bitcoin
-                      </div>
-                      <div 
+                    // აქ top-full უზრუნველყოფს, რომ მენიუ ღილაკის ქვემოთ გამოჩნდეს
+                    <div className="absolute top-full left-0 right-0 -mt-px bg-white border-l border-r border-b border-gray-300 rounded-b-lg rounded-t-none shadow-lg z-10">
+                      <div
                         className="px-4 py-2 cursor-pointer hover:bg-blue-50 text-gray-800 text-sm"
                         onClick={() => {
                           setWalletAddress('card');
@@ -731,6 +870,15 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
                         }}
                       >
                         Card
+                      </div>
+                      <div
+                        className="px-4 py-2 cursor-pointer hover:bg-blue-50 text-gray-800 text-sm"
+                        onClick={() => {
+                          setWalletAddress('bitcoin');
+                          setShowPaymentDropdown(false);
+                        }}
+                      >
+                        Bitcoin
                       </div>
                     </div>
                   )}
@@ -764,7 +912,7 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
                   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 mr-2 text-green-500">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
-                  <span className="font-medium">Payment processing! The seller will be notified soon.</span>
+                  <span className="font-medium">Payment processing! Transaction will be completed soon.</span>
                 </div>
                 <div className="pulse-animation">
                   <div className="w-3 h-3 bg-green-500 rounded-full"></div>
@@ -800,12 +948,16 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
           {/* If payment is completed show confirmation */}
           {paymentCompleted && (
             <div className="mt-4 border-t border-gray-200 pt-4">
+              {/* The following div containing the message will be removed
               <div className="flex items-center bg-green-50 text-green-700 p-3 rounded-lg border border-green-200">
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 mr-2 text-green-500">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
-                <span className="font-medium">Payment completed. The seller has been notified.</span>
+                <span className="font-medium">Payment completed! Transaction process started.</span>
               </div>
+              */}
+              
+              {/* Escrow agent information section is removed from here */}
             </div>
           )}
         </div>
@@ -866,8 +1018,7 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
         )}
         
         <div 
-          className={`max-w-[80%] p-3 rounded-lg shadow-sm ${
-            isOwn 
+          className={`max-w-[80%] p-3 rounded-lg shadow-sm ${isOwn 
               ? 'bg-gradient-to-r from-indigo-600 to-blue-500 text-white rounded-tr-none' 
               : message.isAdmin 
                 ? 'bg-green-100 text-green-800 rounded-tl-none border border-green-200' 
@@ -961,180 +1112,108 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
   const handleSellerConfirm = async () => {
     if (!user || !chatId) return;
 
+    // Display loading/processing state if needed
+    // setIsLoading(true); // Example: You might want a loading state
+
     try {
-      // Update the chat in Firestore to mark that the seller has confirmed
-      const chatDocRef = doc(db, "chats", chatId);
-      await updateDoc(chatDocRef, {
-        sellerConfirmed: true,
-        sellerConfirmedAt: Date.now()
-      });
+      const confirmOfferFunction = httpsCallable(functions, 'confirmSellerOffer');
+      const result = await confirmOfferFunction({ chatId });
+      
+      const data = result.data as { success: boolean, message?: string };
 
-      // Update local state
-      setSellerConfirmed(true);
-
-      console.log("Seller confirmation completed");
+      if (data.success) {
+        // No need to setSellerConfirmed(true) here directly.
+        // The Firestore onSnapshot listener will detect the change in the 'chats' document
+        // (specifically the sellerConfirmed field) and update the local state (chatData and subsequently sellerConfirmed).
+      } else {
+        // Handle potential errors returned from the cloud function even if it's a 'success: false' scenario
+        setError(data.message || "Failed to confirm offer. Please try again.");
+      }
     } catch (err) {
-      console.error("Error confirming offer:", err);
-      setError("Failed to confirm offer");
+      const httpsError = err as any; // Type assertion to access HttpsError properties
+      if (httpsError.code && httpsError.message) {
+        setError(`Error: ${httpsError.message} (code: ${httpsError.code})`);
+      } else {
+        setError("Failed to confirm offer. Please check your connection and try again.");
+      }
+    } finally {
+      // setIsLoading(false); // Example: Reset loading state
     }
   };
 
   // ტაიმერის კომპონენტი
   const TransferTimer = () => {
     // თუ ჩატი არ არის, არ გამოვაჩინოთ ტაიმერი
-    if (!chatData) return null;
-    
-    // გადახდის დადასტურების შემდეგაც გამოვაჩინოთ ტაიმერი
-    if (paymentCompleted) {
-      // თუ ტაიმერი აქტიურია, ვაჩვენოთ ის
-      if (timerActive && timerEndDate && remainingTime) {
-      const { days, hours, minutes, seconds } = remainingTime;
-      
-      if (days === 0 && hours === 0 && minutes === 0 && seconds === 0) {
-          // ტაიმერი დასრულდა - მესიჯის ფორმით
-        return (
-            <div className="flex justify-start mb-4">
-              <div className="h-12 w-12 rounded-full overflow-hidden mr-2 flex-shrink-0 border border-gray-200 shadow-sm">
-                <div className="h-full w-full bg-yellow-500 flex items-center justify-center text-white font-bold">
-                  S
-                </div>
-              </div>
-              <div className="max-w-[80%] p-3 rounded-lg shadow-sm bg-yellow-50 text-yellow-800 border border-yellow-200 rounded-tl-none">
-                <div className="text-xs font-medium mb-1 text-yellow-600 flex items-center">
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3 mr-1">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
-              </svg>
-                  System
-                </div>
-                <div className="font-semibold text-green-800 mb-1">
-                Transfer Ready!
-            </div>
-                <div className="text-sm">
-              The 7-day waiting period has passed. The primary ownership rights can now be transferred.
-                </div>
-                <div className="text-xs mt-1 text-right text-yellow-500">
-                  {new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                </div>
-              </div>
-            </div>
-          );
-        }
-        
-        // აქტიური ტაიმერი გადახდის შემდეგ - მესიჯის ფორმით
-        return (
-          <div className="flex justify-start mb-4">
-            <div className="h-12 w-12 rounded-full overflow-hidden mr-2 flex-shrink-0 border border-gray-200 shadow-sm">
-              <div className="h-full w-full bg-yellow-500 flex items-center justify-center text-white font-bold">
-                S
-              </div>
-            </div>
-            <div className="max-w-[80%] p-3 rounded-lg shadow-sm bg-yellow-50 text-yellow-800 border border-yellow-200 rounded-tl-none">
-              <div className="text-xs font-medium mb-1 text-yellow-600 flex items-center">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3 mr-1">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
-                </svg>
-                System
-              </div>
-              <div className="font-medium mb-2">Account transfer must be completed by:</div>
-              <div className="bg-gray-600 rounded-lg shadow-md p-3 mb-1">
-                <div className="flex justify-between items-center">
-                  <div className="text-center px-2 mx-1">
-                    <div className="text-white text-base font-bold">{days.toString().padStart(2, '0')}</div>
-                    <div className="text-gray-300 text-xs">day</div>
-                  </div>
-                  
-                  <div className="text-center px-2 mx-1">
-                    <div className="text-white text-base font-bold">{hours.toString().padStart(2, '0')}</div>
-                    <div className="text-gray-300 text-xs">hour</div>
-                  </div>
-                  
-                  <div className="text-center px-2 mx-1">
-                    <div className="text-white text-base font-bold">{minutes.toString().padStart(2, '0')}</div>
-                    <div className="text-gray-300 text-xs">min</div>
-                  </div>
-                  
-                  <div className="text-center px-2 mx-1">
-                    <div className="text-white text-base font-bold">{seconds.toString().padStart(2, '0')}</div>
-                    <div className="text-gray-300 text-xs">sec</div>
-                  </div>
-                </div>
-              </div>
-              <p className="text-xs mb-1">
-                After this period, the transaction will be completed and the account will be transferred to the buyer.
-              </p>
-              <div className="text-xs mt-1 text-right text-yellow-500">
-                {new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-              </div>
-            </div>
-          </div>
-        );
-      } else if (!timerActive) {
-        // თუ გადახდა დასრულებულია, მაგრამ ტაიმერი არ არის აქტიური - მესიჯის ფორმით
-        return (
-          <div className="flex justify-start mb-4">
-            <div className="h-12 w-12 rounded-full overflow-hidden mr-2 flex-shrink-0 border border-gray-200 shadow-sm">
-              <div className="h-full w-full bg-yellow-500 flex items-center justify-center text-white font-bold">
-                S
-              </div>
-            </div>
-            <div className="max-w-[80%] p-3 rounded-lg shadow-sm bg-yellow-50 text-yellow-800 border border-yellow-200 rounded-tl-none">
-              <div className="text-xs font-medium mb-1 text-yellow-600 flex items-center">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3 mr-1">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
-                </svg>
-                System
-              </div>
-              <div className="font-semibold text-blue-700 mb-1">
-                Payment Completed
-              </div>
-              <div className="text-sm">
-                Payment has been received and the 7-day account transfer period is starting. The timer will appear here momentarily.
-              </div>
-              <div className="text-xs mt-1 text-right text-yellow-500">
-                {new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-              </div>
-            </div>
-          </div>
-        );
-      }
-      
+    if (!chatData) {
       return null;
     }
     
-    return null; // შევცვალოთ ტაიმერის აქამდე არსებული კოდი, რომ მესიჯის სახით გამოჩნდეს
-  };
-  
-  // ფუნქცია ტაიმერის განახლებისთვის
-  const updateRemainingTime = () => {
-    if (!transferReadyTime) return;
-    
-    const now = Date.now();
-    const remainingMs = Math.max(0, transferReadyTime - now);
-    
-    if (remainingMs <= 0) {
-      // ტაიმერი დასრულდა
-      setRemainingTime({
-        days: 0,
-        hours: 0,
-        minutes: 0,
-        seconds: 0
-      });
+    // ტაიმერი გამოჩნდება მხოლოდ მაშინ, როცა გადახდა დასრულებულია და ტაიმერი აქტიურია
+    if (paymentCompleted && timerActive && timerEndDate && remainingTime) {
+      const daysNum = remainingTime.days;
+      const hoursNum = remainingTime.hours;
+      const minutesNum = remainingTime.minutes;
+      const secondsNum = remainingTime.seconds;
       
-      // გავწმინდოთ ინტერვალი
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
+      // აქტიური ტაიმერი - მესიჯის ფორმით
+      if (daysNum > 0 || hoursNum > 0 || minutesNum > 0 || secondsNum > 0) {
+        return (
+          <div className="my-4 p-3 rounded-lg shadow-sm bg-yellow-50 text-yellow-800 border border-yellow-200 max-w-md ml-0 mr-auto">
+            <div className="font-medium mb-2 text-center">Account transfer must be completed by:</div>
+            <div className="bg-gray-600 rounded-lg shadow-md p-3 mb-1">
+              <div className="flex justify-between items-center">
+                <div className="text-center px-2 mx-1">
+                  <div className="text-white text-base font-bold">{daysNum.toString().padStart(2, '0')}</div>
+                  <div className="text-gray-300 text-xs">day</div>
+                </div>
+                
+                <div className="text-center px-2 mx-1">
+                  <div className="text-white text-base font-bold">{hoursNum.toString().padStart(2, '0')}</div>
+                  <div className="text-gray-300 text-xs">hour</div>
+                </div>
+                
+                <div className="text-center px-2 mx-1">
+                  <div className="text-white text-base font-bold">{minutesNum.toString().padStart(2, '0')}</div>
+                  <div className="text-gray-300 text-xs">min</div>
+                </div>
+                
+                <div className="text-center px-2 mx-1">
+                  <div className="text-white text-base font-bold">{secondsNum.toString().padStart(2, '0')}</div>
+                  <div className="text-gray-300 text-xs">sec</div>
+                </div>
+              </div>
+            </div>
+            <p className="text-xs mb-1 text-center">
+              After this period, the transaction will be completed and the account will be transferred to the buyer.
+            </p>
+          </div>
+        );
+      } else {
+        // ტაიმერი დასრულდა - მესიჯის ფორმით
+        return (
+          <div className="my-4 p-3 rounded-lg shadow-sm bg-yellow-50 text-yellow-800 border border-yellow-200 max-w-md ml-0 mr-auto">
+            <div className="font-semibold text-green-800 mb-1 text-center">
+              Transfer Ready!
+            </div>
+            <div className="text-sm text-center">
+              The 7-day waiting period has passed. The primary ownership rights can now be transferred.
+            </div>
+          </div>
+        );
       }
-      return;
+    } else if (paymentCompleted && !timerActive) {
+      // თუ გადახდა დასრულებულია, მაგრამ ტაიმერი არ არის აქტიური:
+      // ვაჩვენოთ "დაწყების" ღილაკი მხოლოდ ადმინისთვის.
+      // მყიდველისთვის ამ ეტაპზე არაფერი გამოჩნდება.
+      if (user?.isAdmin) {
+        return null; // მთლიანად წაიშალა დივი ღილაკით
+      } else {
+        // მყიდველისთვის (არაადმინისთვის) ამ ეტაპზე არაფერს ვაჩვენებთ
+        return null;
+      }
     }
     
-    // გამოვთვალოთ დარჩენილი დრო
-    const days = Math.floor(remainingMs / (1000 * 60 * 60 * 24));
-    const hours = Math.floor((remainingMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-    const minutes = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
-    const seconds = Math.floor((remainingMs % (1000 * 60)) / 1000);
-    
-    setRemainingTime({ days, hours, minutes, seconds });
+    return null; 
   };
   
   // ტაიმერის დაწყების ეფექტი
@@ -1157,58 +1236,47 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
   // ჩატის მონაცემების განახლების ეფექტი
   useEffect(() => {
     if (chatData) {
-      // შევამოწმოთ არის თუ არა ტაიმერი დაწყებული
+      // შევამოწმოთ არის თუ არა ტაიმერი დაწყებული Firestore-დან მიღებული მონაცემებით
       if (chatData.transferTimerStarted && chatData.transferReadyTime) {
         setTransferTimerStarted(true);
         setTransferReadyTime(chatData.transferReadyTime);
+        // დამატებით, განვაახლოთ timerActive და timerEndDate, რათა TransferTimer კომპონენტმა სწორად იმუშაოს
+        setTimerActive(true);
+        setTimerEndDate(chatData.transferReadyTime);
+        updateTimer(chatData.transferReadyTime); // დავამატოთ remainingTime-ის განახლებაც
       }
-      
-      // ასევე შევამოწმოთ ახალი ტაიმერი (7-დღიანი) ამ კონკრეტული ჩატისთვის
-      if (chatData.timerActive && chatData.timerEndDate) {
+      // ასევე შევამოწმოთ ძველი ფორმატის ტაიმერი (timerActive) და განვაახლოთ შესაბამისი სტეიტები
+      // ეს მნიშვნელოვანია, თუკი ძველი ჩატები იყენებენ ამ ფორმატს
+      else if (chatData.timerActive && chatData.timerEndDate) {
         setTimerActive(true);
         setTimerEndDate(chatData.timerEndDate);
-        // გადავუყვანოთ ახალი ტაიმერის მდგომარეობა remainingTime-ში
-        updateTimer(chatData.timerEndDate);
+        // თავსებადობისთვის, განვაახლოთ transferTimerStarted და transferReadyTime
+        setTransferTimerStarted(true);
+        setTransferReadyTime(chatData.timerEndDate);
+        updateTimer(chatData.timerEndDate); // დავამატოთ remainingTime-ის განახლებაც
       } else {
+        // თუ არცერთი ტაიმერი არ არის აქტიური Firestore-ში, გავასუფთავოთ ლოკალური სტეიტები
         setTimerActive(false);
         setTimerEndDate(null);
+        setTransferTimerStarted(false);
+        setTransferReadyTime(null);
+        setRemainingTime(null); // დავამატოთ remainingTime-ის გასუფთავებაც
       }
+
+      // განვაახლოთ escrowAgentAssigned მდგომარეობა chatData-ზე დაყრდნობით
+      // ვვარაუდობთ, რომ 'managerRightsAssigned' არის boolean ველი Chat ტიპში/Firestore დოკუმენტში
+      // თუ chatData.managerRightsAssigned არის true, escrowAgentAssigned გახდება true.
+      // თუ chatData.managerRightsAssigned არის false ან undefined, escrowAgentAssigned გახდება false.
+      setEscrowAgentAssigned(!!chatData.managerRightsAssigned);
     }
   }, [chatData]);
   
   // ეფექტი გადახდის დასრულების შემდეგ ტაიმერის დასაწყებად
   useEffect(() => {
-    const startTimerAfterPayment = async () => {
-      // თუ გადახდა დასრულებულია, ჩატის მონაცემები არსებობს, მაგრამ ტაიმერი არ არის აქტიური
-      if (paymentCompleted && chatData && !chatData.timerActive && !timerActive) {
-        console.log("Payment completed, starting timer");
-        try {
-          // დავაყენოთ 7-დღიანი ტაიმერი
-          const sevenDaysInMs = 7 * 24 * 60 * 60 * 1000;
-          const endDate = Date.now() + sevenDaysInMs;
-          
-          // განვაახლოთ ჩატის დოკუმენტი Firestore-ში
-          const chatDocRef = doc(db, "chats", chatId);
-          await updateDoc(chatDocRef, {
-            timerActive: true,
-            timerStartDate: Date.now(),
-            timerEndDate: endDate
-          });
-          
-          console.log("Timer started successfully. Will end at:", new Date(endDate).toLocaleString());
-          
-          // განვაახლოთ ლოკალური მდგომარეობა
-          setTimerActive(true);
-          setTimerEndDate(endDate);
-          updateTimer(endDate);
-        } catch (error) {
-          console.error("Error starting timer after payment:", error);
-        }
-      }
-    };
-    
-    startTimerAfterPayment();
-  }, [paymentCompleted, chatData, chatId, timerActive]);
+    // აღარ გვჭირდება ავტომატური ტაიმერის დაწყება, რადგან ახლა ტაიმერი იწყება 
+    // მხოლოდ ღილაკზე დაჭერით და cloud function-ით ხდება სერვერზე ტაიმერის დაყენება
+    // ამ ეფექტის შემცვლელი კოდი მოთავსებულია handleStartTransferTimer ფუნქციაში
+  }, [paymentCompleted, chatData]);
   
   // ახალი ტაიმერის განახლება
   useEffect(() => {
@@ -1263,78 +1331,12 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
         setRemainingTime({ days, hours, minutes, seconds });
       };
   
-  // ადმინის მეილების მიღების ფუნქცია
-  const fetchAdminEmails = async () => {
-    try {
-      const getAdminEmailsFunction = httpsCallable(functions, 'getAdminEmails');
-      const result = await getAdminEmailsFunction({});
-      
-      // სერვერიდან მიღებული მონაცემები
-      const data = result.data as { adminEmails: string[] };
-      setAdminEmails(data.adminEmails || []);
-      
-      if (data.adminEmails && data.adminEmails.length > 0) {
-        // პირველი მეილი ავტომატურად შევარჩიოთ
-        setAdminEmail(data.adminEmails[0]);
-      }
-      
-    } catch (error) {
-      console.error("Error fetching admin emails:", error);
-      setError("Failed to load admin emails");
-    }
-  };
-  
-  // ადმინისტრატორის მოწვევის ფუნქცია
-  const handleInviteAdmin = async () => {
-    if (!adminEmail || !user || !chatId || !chatData) return;
-    
-    setIsInvitingAdmin(true);
-    
-    try {
-      // გამოვიძახოთ Cloud Function
-      const inviteAdminFunction = httpsCallable(functions, 'inviteAdminToPrivateChat');
-      
-      // შევქმნათ ტრანზაქციის ID
-      const transactionId = chatId.substring(0, 6); // გამოვიყენოთ chatId-ის ნაწილი როგორც ტრანზაქციის ID
-      const productName = chatData.productName || 'Unknown Product';
-      const productPrice = chatData.productPrice || '0';
-      
-      const result = await inviteAdminFunction({
-        chatId,
-        adminEmail,
-        transactionId,
-        productName,
-        productPrice,
-        initialMessage: `Seller invited you as Escrow Agent for Transaction #${transactionId}` // ახალი პარამეტრი სერვერისთვის
-      });
-      
-      // სერვერიდან მიღებული მონაცემები
-      const data = result.data as { success: boolean, privateChatId: string };
-      
-      if (data.success) {
-        // წარმატებული შეტყობინება
-        alert("Admin invited successfully! A private chat has been created.");
-        
-        // ჩავასუფთავოთ მეილის ველი
-        setAdminEmail("");
-        
-      } else {
-        throw new Error("Failed to invite admin. Please try again.");
-      }
-      
-    } catch (error) {
-      console.error("Error inviting admin:", error);
-      alert(`Failed to invite admin: ${error instanceof Error ? error.message : "Unknown error"}`);
-    } finally {
-      setIsInvitingAdmin(false);
-    }
-  };
-  
   // ტაიმერის დაწყების ფუნქცია
   const handleStartTransferTimer = async () => {
     if (!user || !chatId) return;
     
     try {
+      // გამოვიძახოთ Cloud Function ტაიმერის დასაწყებად
       const startTimerFunction = httpsCallable(functions, 'startTransferTimer');
       const result = await startTimerFunction({
         chatId
@@ -1344,159 +1346,27 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
       const data = result.data as { success: boolean, transferReadyTime: number };
       
       if (data.success) {
-        // ჩატის მონაცემები მოვა ონსნაპშოტიდან, აქ არ ვცვლით ლოკალურ მდგომარეობას
-        console.log("Transfer timer started successfully. Will be ready at:", new Date(data.transferReadyTime).toLocaleString());
+        // განვაახლოთ ლოკალური მდგომარეობა სერვერიდან მიღებული მონაცემებით
+        setTimerActive(true);
+        setTimerEndDate(data.transferReadyTime);
+        updateTimer(data.transferReadyTime);
+        
+        alert("ტაიმერი წარმატებით დაიწყო!");
       } else {
-        throw new Error("Failed to start transfer timer. Please try again.");
+        throw new Error("Failed to start transfer timer on server. Please try again.");
       }
       
     } catch (error) {
-      console.error("Error starting transfer timer:", error);
       alert(`Failed to start transfer timer: ${error instanceof Error ? error.message : "Unknown error"}`);
     }
   };
   
-  // ეფექტი ადმინის მეილების მისაღებად, როცა საჭიროა მათი ჩვენება
-  useEffect(() => {
-    if (showAdminEmailDropdown && adminEmails.length === 0) {
-      fetchAdminEmails();
-    }
-  }, [showAdminEmailDropdown]);
+  // ეფექტი ადმინის მეილების მისაღებად - აღარ გვჭირდება
 
   // ადმინის მოწვევის კომპონენტი, რომელიც მხოლოდ გამყიდველისთვის იქნება ხილული
   const AdminInviteComponent = () => {
-    // შევამოწმოთ არის თუ არა მიმდინარე მომხმარებელი გამყიდველი
-    if (!chatData || !user) return null;
-    
-    // გამყიდველის იდენტიფიკაცია
-    const participants = chatData.participants || [];
-    let sellerId = chatData.sellerId;
-    
-    // თუ არ გვაქვს პირდაპირი მითითება, ვცადოთ მონაწილეებიდან გამოცნობა
-    if (!sellerId && participants.length >= 2) {
-      // თუ ჩატში არის მესიჯები ვიპოვოთ გამყიდველი 
-      // ვიმსჯელოთ ესქროუ მესიჯების მიხედვით
-      const escrowMessages = messages.filter(msg => 
-        msg.isEscrowRequest || (msg.text && msg.text.includes("🔒 Request to Purchase"))
-      );
-      
-      if (escrowMessages.length > 0) {
-        // თუ მომხმარებელი არ არის ესქროუ მესიჯის გამგზავნი, ის არის გამყიდველი
-        const escrowMessage = escrowMessages[0];
-        if (escrowMessage.senderId !== user.id) {
-          sellerId = user.id;
-        }
-      }
-    }
-    
-    // თუ მიმდინარე მომხმარებელი არ არის გამყიდველი, არ ვაჩვენოთ ეს კომპონენტი
-    if (sellerId !== user.id) {
-      return null;
-    }
-    
-    // ძირითადი ცვლილება: დავამოწმოთ არის თუ არა გადახდა დასრულებული
-    // კომპონენტი გამოჩნდება მხოლოდ გადახდის წარმატებით დასრულების შემდეგ
-    if (!paymentCompleted) {
-      return null;
-    }
-    
-    // შევამოწმოთ არის თუ არა ეს პრივატული ჩატი ან უკვე სამი მონაწილით
-    // ამ კომპონენტს მხოლოდ მყიდველი+გამყიდველის ჩატში ვაჩვენებთ
-    if (chatData.isPrivateWithAdmin || chatData.isPrivateWithUser) {
-      return null; // პრივატული ჩატია, არ ვაჩვენოთ
-    }
-    
-    // შევამოწმოთ მონაწილეების რაოდენობა - უნდა იყოს ზუსტად 2 მონაწილე
-    if (participants.length !== 2) {
-      return null; // 2-ზე მეტი მონაწილეა, სავარაუდოდ აგენტი უკვე შემოვიდა ჩატში
-    }
-    
-    // გავარკვიოთ უნდა გამოვაჩინოთ თუ არა ეს კომპონენტი (მაგ., თუ ადმინი უკვე შემოვიდა ჩატში)
-    if (chatData.adminJoined) {
-      return null; // ადმინი უკვე შემოვიდა ჩატში
-    }
-    
-    // თუ უკვე გვაქვს პრივატული ჩატი ადმინთან, არ ვაჩვენოთ მოწვევის კომპონენტი
-    if (chatData.hasPrivateAdminChat) {
-      return (
-        <div className="mb-4 p-3 rounded-lg bg-blue-50 border border-blue-100 text-blue-700">
-          <p className="text-sm">
-            You have already created a private chat with an escrow agent. Check your chat list to find it.
-          </p>
-        </div>
-      );
-    }
-    
-    // მხოლოდ კომპონენტის ჩვენება, თუ ყველა პირობა დაკმაყოფილებულია
-    return (
-      <div className="mb-4 p-4 rounded-lg border border-indigo-100 bg-indigo-50">
-        <h3 className="font-semibold text-indigo-800 mb-2">Invite Escrow Agent</h3>
-        <p className="text-sm text-indigo-700 mb-3">
-          Create a private chat with the escrow agent to discuss the transaction details.
-        </p>
-        
-        <div className="flex flex-col sm:flex-row gap-2">
-          <div className="relative flex-1">
-            <input
-              type="email"
-              value={adminEmail}
-              onChange={(e) => setAdminEmail(e.target.value)}
-              placeholder="Enter admin email"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400"
-              onFocus={() => setShowAdminEmailDropdown(true)}
-            />
-            
-            <button
-              type="button"
-              onClick={() => setShowAdminEmailDropdown(!showAdminEmailDropdown)}
-              className="absolute right-2 top-2 text-gray-500 hover:text-indigo-600"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-              </svg>
-            </button>
-            
-            {/* ადმინების ჩამონათვალი */}
-            {showAdminEmailDropdown && (
-              <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 max-h-40 overflow-y-auto">
-                {adminEmails.length > 0 ? (
-                  adminEmails.map((email, index) => (
-                    <div
-                      key={index}
-                      className="px-3 py-2 cursor-pointer hover:bg-indigo-50 text-gray-800 text-sm"
-                      onClick={() => {
-                        setAdminEmail(email);
-                        setShowAdminEmailDropdown(false);
-                      }}
-                    >
-                      {email}
-                    </div>
-                  ))
-                ) : (
-                  <div className="px-3 py-2 text-gray-500 text-sm">Loading admin emails...</div>
-                )}
-              </div>
-            )}
-          </div>
-          
-          <button
-            type="button"
-            onClick={handleInviteAdmin}
-            disabled={!adminEmail || isInvitingAdmin}
-            className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
-          >
-            {isInvitingAdmin ? (
-              <>
-                <div className="animate-spin h-4 w-4 mr-2 border-2 border-white border-t-transparent rounded-full"></div>
-                Inviting...
-              </>
-            ) : (
-              'Invite Admin'
-            )}
-          </button>
-        </div>
-      </div>
-    );
+    // ეს კომპონენტი აღარ იქნება გამოყენებული - დავტოვებთ ცარიელს
+    return null;
   };
 
   // განვაახლოთ სხვა ტაიმერის განახლების ეფექტიც
@@ -1535,13 +1405,17 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
       if (showPaymentDropdown && !target.closest('.payment-dropdown-container')) {
         setShowPaymentDropdown(false);
       }
+      // დავამატოთ იგივე ლოგიკა აგენტის მეილების ჩამოსაშლელი სიისთვის
+      if (showAgentEmailDropdown && !target.closest('.agent-email-dropdown-container')) {
+        setShowAgentEmailDropdown(false);
+      }
     };
 
     document.addEventListener('mousedown', handleClickOutside);
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [showPaymentDropdown]);
+  }, [showPaymentDropdown, showAgentEmailDropdown]);
 
   return (
     <div className="flex flex-col w-full h-full overflow-hidden">
@@ -1551,221 +1425,101 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
         </div>
       ) : error ? (
         <div className="flex-1 flex items-center justify-center">
-          <div className="text-red-500">{error}</div>
+          <div className="text-red-500">{typeof error === 'string' ? error : 'An unexpected error occurred'}</div>
         </div>
       ) : (
         <>
           <div className="overflow-y-auto flex-1 p-4 pb-4 space-y-4">
             {/* დავტოვოთ გადახდის სტატუსის შეტყობინება */}
             <PaymentStatusMessage />
-            
-            {/* არსებული მესიჯები - TransferTimer როგორც ცალკე კომპონენტი აღარ გამოვაჩინოთ */}
-            {messages.map((message) => (
-              <MessageItem key={message.id} message={message} />
-            ))}
-            
-            {/* Timer as a system message - instead of a separate component */}
-            {paymentCompleted && timerActive && timerEndDate && remainingTime && (
-              <div className="flex justify-start mb-4">
-                <div className="h-12 w-12 rounded-full overflow-hidden mr-2 flex-shrink-0 border border-gray-200 shadow-sm">
-                  <div className="h-full w-full bg-yellow-500 flex items-center justify-center text-white font-bold">
-                    S
-                  </div>
-                </div>
-                <div className="max-w-[80%] p-3 rounded-lg shadow-sm bg-yellow-50 text-yellow-800 border border-yellow-200 rounded-tl-none">
-                  <div className="text-xs font-medium mb-1 text-yellow-600 flex items-center">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3 mr-1">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
-                    </svg>
-                    System
-                  </div>
-                  <div className="font-medium mb-2">Account transfer must be completed by:</div>
-                  <div className="bg-gray-600 rounded-lg shadow-md p-3 mb-1">
-                    <div className="flex justify-between items-center">
-                      <div className="text-center px-2 mx-1">
-                        <div className="text-white text-base font-bold">{remainingTime.days.toString().padStart(2, '0')}</div>
-                        <div className="text-gray-300 text-xs">day</div>
-                      </div>
-                      
-                      <div className="text-center px-2 mx-1">
-                        <div className="text-white text-base font-bold">{remainingTime.hours.toString().padStart(2, '0')}</div>
-                        <div className="text-gray-300 text-xs">hour</div>
-                      </div>
-                      
-                      <div className="text-center px-2 mx-1">
-                        <div className="text-white text-base font-bold">{remainingTime.minutes.toString().padStart(2, '0')}</div>
-                        <div className="text-gray-300 text-xs">min</div>
-                      </div>
-                      
-                      <div className="text-center px-2 mx-1">
-                        <div className="text-white text-base font-bold">{remainingTime.seconds.toString().padStart(2, '0')}</div>
-                        <div className="text-gray-300 text-xs">sec</div>
-                      </div>
-                    </div>
-                  </div>
-                  <p className="text-xs mb-1">
-                    After this period, the transaction will be completed and the account will be transferred to the buyer.
-                  </p>
-                  <div className="text-xs mt-1 text-right text-yellow-500">
-                    {new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                  </div>
-                </div>
-              </div>
-            )}
-            
-            {/* Timer ended message */}
-            {paymentCompleted && timerActive && timerEndDate && remainingTime && 
-             remainingTime.days === 0 && remainingTime.hours === 0 && remainingTime.minutes === 0 && remainingTime.seconds === 0 && (
-              <div className="flex justify-start mb-4">
-                <div className="h-12 w-12 rounded-full overflow-hidden mr-2 flex-shrink-0 border border-gray-200 shadow-sm">
-                  <div className="h-full w-full bg-yellow-500 flex items-center justify-center text-white font-bold">
-                    S
-                  </div>
-                </div>
-                <div className="max-w-[80%] p-3 rounded-lg shadow-sm bg-yellow-50 text-yellow-800 border border-yellow-200 rounded-tl-none">
-                  <div className="text-xs font-medium mb-1 text-yellow-600 flex items-center">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3 mr-1">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
-                    </svg>
-                    System
-                  </div>
-                  <div className="font-semibold text-green-800 mb-1">
-                    Transfer Ready!
-                  </div>
-                  <div className="text-sm">
-                    The 7-day waiting period has passed. The primary ownership rights can now be transferred.
-                  </div>
-                  <div className="text-xs mt-1 text-right text-yellow-500">
-                    {new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                  </div>
-                </div>
-              </div>
-            )}
 
-            {/* Payment completed but timer not active message - ამ შეტყობინებასაც ვშლი */}
-            
-            {/* ადმინის მოწვევის მესიჯი ჩატში - მესიჯების შემდეგ */}
-            {paymentCompleted && chatData && user && ((function() {
-              // გამყიდველის იდენტიფიკაცია (იგივე ლოგიკა რაც ადრინდელ AdminInviteComponent-ში)
-              const participants = chatData.participants || [];
-              let sellerId = chatData.sellerId;
-              
-              // თუ არ გვაქვს პირდაპირი მითითება, ვცადოთ მონაწილეებიდან გამოცნობა
-              if (!sellerId && participants.length >= 2) {
-                const escrowMessages = messages.filter(msg => 
-                  msg.isEscrowRequest || (msg.text && msg.text.includes("🔒 Request to Purchase"))
-                );
-                
-                if (escrowMessages.length > 0) {
-                  const escrowMessage = escrowMessages[0];
-                  if (escrowMessage.senderId !== user.id) {
-                    sellerId = user.id;
-                  }
-                }
-              }
-              
-              // არის თუ არა მიმდინარე მომხმარებელი გამყიდველი
-              const isSeller = sellerId === user.id;
-              
-              // ვაჩვენოთ მხოლოდ გამყიდველისთვის
-              if (isSeller && !chatData.isPrivateWithAdmin && !chatData.adminJoined && 
-                  participants.length === 2 && !chatData.hasPrivateAdminChat) {
-                return (
-                  <div className="flex justify-end mb-4">
-                    <div className="max-w-[90%]">
-                      <div className="flex items-start">
-                        <div className="bg-white p-3 rounded-lg shadow-sm border border-indigo-100 flex-1">
-                          <div className="text-sm font-medium mb-1 flex items-center">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4 mr-1 text-indigo-600">
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z" />
+            {/* Timer component - MOVED UP and its own logic will handle display */}
+            <TransferTimer />
+
+            {/* Messages will be mapped directly here. The parent div (overflow-y-auto) has space-y-4. */}
+            {messages.map((message, index) => {
+              const isRequestOrEscrowMessage = message.isRequest || message.isEscrowRequest;
+              const showEscrowDetailsBlock = paymentCompleted && user && chatData && user.id === chatData.sellerId;
+              const hasMoreMessages = messages.length > index + 1;
+              return (
+                <React.Fragment key={message.id}>
+                  <MessageItem message={message} />
+
+                  {isRequestOrEscrowMessage && showEscrowDetailsBlock && (
+                    <div className="md:w-2/3 lg:w-1/2 mr-auto p-3"> {/* Removed bg-yellow-50 text-yellow-800 border border-yellow-200 rounded-lg shadow-sm */}
+                        <div className="text-xs font-medium mb-2 text-yellow-700 flex items-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4 mr-1.5">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
                             </svg>
-                            <span className="text-indigo-800">System</span>
+                            Action Required
+                        </div>
+                        <h3 className="font-medium text-gray-700 mb-3">Escrow Agent Details</h3>
+                        <div className="mb-3">
+                          <div className="mb-2 relative agent-email-dropdown-container">
+                            <label htmlFor="escrowEmail" className="block text-sm font-medium text-gray-700 mb-1">Escrow Agent Email:</label>
+                            <input
+                              type="email"
+                              id="escrowEmail"
+                              name="escrowEmail"
+                              value={selectedAgentEmail}
+                              onChange={(e) => setSelectedAgentEmail(e.target.value)}
+                              readOnly={escrowAgentAssigned}
+                              className={`w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm ${escrowAgentAssigned ? 'bg-gray-100 cursor-not-allowed' : 'bg-white'}`}
+                              placeholder="Select or type an agent\'s email"
+                              onFocus={() => !escrowAgentAssigned && setShowAgentEmailDropdown(true)}
+                            />
+                            {showAgentEmailDropdown && !escrowAgentAssigned && (
+                              <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10">
+                                {adminEmailsList.length > 0 ? adminEmailsList.map(agentEmail => (
+                                  <div
+                                    key={agentEmail}
+                                    className="px-4 py-2 cursor-pointer hover:bg-blue-50 text-gray-800 text-sm"
+                                    onClick={() => {
+                                      setSelectedAgentEmail(agentEmail);
+                                      setShowAgentEmailDropdown(false);
+                                    }}
+                                  >
+                                    {agentEmail}
+                                  </div>
+                                )) : <div className="px-4 py-2 text-gray-500 text-sm">No agents available</div>}
+                              </div>
+                            )}
                           </div>
-                          <div className="mb-3">
-                            <strong className="text-indigo-800">Invite Escrow Agent</strong><br/>
-                            <span className="text-sm text-gray-600">Create a private chat with the escrow agent.</span>
-                          </div>
-                          
-                          <div className="flex flex-col gap-2 mt-2">
-                            <div className="relative">
-                              <input
-                                type="email"
-                                value={adminEmail}
-                                onChange={(e) => setAdminEmail(e.target.value)}
-                                placeholder="Enter admin email"
-                                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400"
-                                onFocus={() => setShowAdminEmailDropdown(true)}
-                              />
-                              
-                              <button
-                                type="button"
-                                onClick={() => setShowAdminEmailDropdown(!showAdminEmailDropdown)}
-                                className="absolute right-2 top-2 text-gray-500 hover:text-indigo-600"
-                              >
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-                                </svg>
-                              </button>
-                              
-                              {/* ადმინების ჩამონათვალი */}
-                              {showAdminEmailDropdown && (
-                                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 max-h-40 overflow-y-auto">
-                                  {adminEmails.length > 0 ? (
-                                    adminEmails.map((email, index) => (
-                                      <div
-                                        key={index}
-                                        className="px-3 py-2 cursor-pointer hover:bg-indigo-50 text-gray-800 text-sm"
-                                        onClick={() => {
-                                          setAdminEmail(email);
-                                          setShowAdminEmailDropdown(false);
-                                        }}
-                                      >
-                                        {email}
-                                      </div>
-                                    ))
-                                  ) : (
-                                    <div className="px-3 py-2 text-gray-500 text-sm">Loading admin emails...</div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                            
+                        </div>
+                        <div className="mt-3 flex flex-col items-start gap-2">
+                          {!escrowAgentAssigned && (
                             <button
-                              type="button"
-                              onClick={handleInviteAdmin}
-                              disabled={!adminEmail || isInvitingAdmin}
-                              className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center text-sm"
+                              onClick={handleAssignManagerRights}
+                              className="px-4 py-2 bg-orange-500 text-white text-sm font-medium rounded-lg hover:bg-orange-600 transition-colors whitespace-nowrap"
                             >
-                              {isInvitingAdmin ? (
-                                <>
-                                  <div className="animate-spin h-4 w-4 mr-2 border-2 border-white border-t-transparent rounded-full"></div>
-                                  Inviting...
-                                </>
-                              ) : (
-                                'Invite Admin'
-                              )}
+                             Assigned manager's rights to the escrow agent
                             </button>
-                          </div>
-                          
-                          <div className="text-xs mt-3 text-right text-gray-400">
-                            {new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                          </div>
+                          )}
+                          <button className="px-4 py-2 bg-red-500 text-white text-sm font-medium rounded-lg hover:bg-red-600 transition-colors whitespace-nowrap">
+                            Return payment to the buyer (cancel the transaction)
+                          </button>
+                          <button
+                            onClick={handleContactEscrowAgent}
+                            className="px-4 py-2 bg-gray-500 text-white text-sm font-medium rounded-lg hover:bg-gray-600 transition-colors whitespace-nowrap"
+                          >
+                            I've been tricked! / There's been some kind of problem contact a live escrow agent
+                          </button>
                         </div>
-                        
-                        <div className="h-12 w-12 rounded-full overflow-hidden ml-2 flex-shrink-0 border border-gray-200 shadow-sm">
-                          <div className="h-full w-full bg-gradient-to-br from-indigo-500 to-blue-500 flex items-center justify-center text-white font-medium">
-                            S
-                          </div>
-                        </div>
-                      </div>
                     </div>
-                  </div>
-                );
-              }
-              return null;
-            })())}
-            
+                  )}
+
+                  {isRequestOrEscrowMessage && hasMoreMessages && (
+                    <div className="h-[70px]" /> // Changed from h-[100px] to h-[70px]
+                  )}
+                </React.Fragment>
+              );
+            })}
+
+            {/* messagesEndRef is now a direct child of the scrollable container */}
             <div ref={messagesEndRef} />
+
+            {/* ადმინის მოწვევის კომპონენტი სრულად წაშლილია */}
+
           </div>
         </>
       )}
@@ -1789,19 +1543,7 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
               className="text-gray-400 hover:text-indigo-500 transition-colors"
               title="Insert escrow request template"
               onClick={() => {
-                setNewMessage(`🔒 Request to Purchase Octopus
-Transaction ID: 1736366
-Transaction Amount: $12
-Payment Method: Stripe
-The buyer pays the cost of the channel + 8% ($3 minimum) service fee.
-
-The seller confirms and agrees to use the escrow service.
-
-The escrow agent verifies everything and assigns manager rights to the buyer.
-
-After 7 days (or sooner if agreed), the escrow agent removes other managers and transfers full ownership to the buyer.
-
-The funds are then released to the seller. Payments are sent instantly via all major payment methods.`);
+                setNewMessage(`🔒 Request to Purchase Octopus\nTransaction ID: 1736366\nTransaction Amount: $12\nPayment Method: Stripe\nThe buyer pays the cost of the channel + 8% ($3 minimum) service fee.\n\nThe seller confirms and agrees to use the escrow service.\n\nThe escrow agent verifies everything and assigns manager rights to the buyer.\n\nAfter 7 days (or sooner if agreed), the escrow agent removes other managers and transfers full ownership to the buyer.\n\nThe funds are then released to the seller. Payments are sent instantly via all major payment methods.`);
               }}
             >
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">

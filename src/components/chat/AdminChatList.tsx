@@ -7,6 +7,8 @@ import { ref, onValue, off, remove, set } from "firebase/database";
 import { doc, getDoc, updateDoc, collection, addDoc, query, where, onSnapshot, orderBy, getDocs, deleteDoc } from "firebase/firestore";
 import { db, rtdb } from "@/firebase/config";
 import Image from "next/image";
+import { httpsCallable } from "firebase/functions";
+import { functions } from "@/firebase/config";
 
 // გაერთიანებული ინტერფეისი ყველა ნოტიფიკაციისთვის
 interface BaseNotification {
@@ -102,6 +104,7 @@ export default function AdminChatList({
   const [selectedNotification, setSelectedNotification] = useState<WalletNotification | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [deleteConfirmation, setDeleteConfirmation] = useState<string | null>(null);
+  const [chatTimerStatus, setChatTimerStatus] = useState<Record<string, boolean>>({});
   const { user } = useAuth();
   const router = useRouter();
 
@@ -216,6 +219,48 @@ export default function AdminChatList({
     };
   }, [user]);
 
+  useEffect(() => {
+    if (!user || !user.isAdmin) return;
+
+    // ვითხოვთ მხოლოდ გადახდილი ჩატების მონაცემებს ტაიმერის სტატუსის შესამოწმებლად
+    if (paidPayments.length > 0) {
+      // შევქმნათ გადახდილი ჩატების ID-ების მასივი
+      const chatIds = paidPayments.map(payment => payment.chatId);
+      
+      // თუ არ არის ჩატების ID-ები, გამოვიდეთ
+      if (chatIds.length === 0) return;
+      
+      // შევქმნათ ყველა ჩატისთვის შემოწმების ფუნქცია
+      const fetchChatTimerStatuses = async () => {
+        try {
+          const chatStatusesMap: Record<string, boolean> = {};
+          
+          // აქ ვიყენებთ Promise.all რათა პარალელურად შევამოწმოთ ყველა ჩატის სტატუსი
+          await Promise.all(chatIds.map(async (chatId) => {
+            const chatDocRef = doc(db, "chats", chatId);
+            const chatDoc = await getDoc(chatDocRef);
+            
+            if (chatDoc.exists()) {
+              const chatData = chatDoc.data();
+              // transferTimerStarted არის ჩვენთვის საინტერესო ველი
+              chatStatusesMap[chatId] = chatData.transferTimerStarted || chatData.timerActive || false;
+            } else {
+              chatStatusesMap[chatId] = false;
+            }
+          }));
+          
+          // განვაახლოთ სტეიტი
+          setChatTimerStatus(chatStatusesMap);
+        } catch (error) {
+          console.error("Error fetching chat timer statuses:", error);
+        }
+      };
+      
+      // გამოვიძახოთ ფუნქცია 
+      fetchChatTimerStatuses();
+    }
+  }, [paidPayments, user]);
+
   const handleJoinChat = async (request: AdminRequest) => {
     if (!user || !user.isAdmin) return;
 
@@ -301,16 +346,8 @@ export default function AdminChatList({
       // Check if admin is already part of the chat participants
       const chatData = chatDoc.data();
       
-      // დროის გამოთვლა ტაიმერისთვის
-      const currentDate = new Date();
-      const timerStartDate = currentDate.getTime();
-      
-      // 7 დღის შემდეგ (7 * 24 * 60 * 60 * 1000 = 604800000 მილიწამი)
-      const sevenDaysLater = new Date(currentDate.getTime() + 604800000);
-      const timerEndDate = sevenDaysLater.getTime();
-      
       if (!chatData.participants.includes(user.id)) {
-        // Update the chat to add admin as a participant
+        // Update the chat to add admin as a participant (ტაიმერის გარეშე)
         await updateDoc(chatDocRef, {
           adminJoined: true,
           participants: [...chatData.participants, user.id],
@@ -321,18 +358,8 @@ export default function AdminChatList({
           participantPhotos: {
             ...chatData.participantPhotos,
             [user.id]: user.photoURL || ""
-          },
-          // ტაიმერის ინფორმაციის დამატება
-          timerActive: true,
-          timerStartDate: timerStartDate,
-          timerEndDate: timerEndDate
-        });
-      } else if (!chatData.timerActive) {
-        // თუ ადმინი უკვე მონაწილეა, მაგრამ ტაიმერი არ არის გააქტიურებული
-        await updateDoc(chatDocRef, {
-          timerActive: true,
-          timerStartDate: timerStartDate,
-          timerEndDate: timerEndDate
+          }
+          // აღარ ვააქტიურებთ ტაიმერს ავტომატურად
         });
       }
 
@@ -505,16 +532,8 @@ export default function AdminChatList({
       // Check if admin is already part of the chat participants
       const chatData = chatDoc.data();
       
-      // დროის გამოთვლა ტაიმერისთვის
-      const currentDate = new Date();
-      const timerStartDate = currentDate.getTime();
-      
-      // 7 დღის შემდეგ (7 * 24 * 60 * 60 * 1000 = 604800000 მილიწამი)
-      const sevenDaysLater = new Date(currentDate.getTime() + 604800000);
-      const timerEndDate = sevenDaysLater.getTime();
-      
       if (!chatData.participants.includes(user.id)) {
-        // Update the chat to add admin as a participant and დავიწყოთ 7-დღიანი ტაიმერი
+        // Update the chat to add admin as a participant (ტაიმერის გარეშე)
         await updateDoc(chatDocRef, {
           adminJoined: true,
           participants: [...chatData.participants, user.id],
@@ -525,18 +544,8 @@ export default function AdminChatList({
           participantPhotos: {
             ...chatData.participantPhotos,
             [user.id]: user.photoURL || ""
-          },
-          // ტაიმერის ინფორმაციის დამატება
-          timerActive: true,
-          timerStartDate: timerStartDate,
-          timerEndDate: timerEndDate
-        });
-      } else if (!chatData.timerActive) {
-        // თუ ადმინი უკვე მონაწილეა, მაგრამ ტაიმერი არ არის გააქტიურებული
-        await updateDoc(chatDocRef, {
-          timerActive: true,
-          timerStartDate: timerStartDate,
-          timerEndDate: timerEndDate
+          }
+          // აღარ ვააქტიურებთ ტაიმერს ავტომატურად
         });
       }
 
@@ -577,6 +586,78 @@ export default function AdminChatList({
     } catch (err) {
       console.error("Error deleting paid payment:", err);
       setError("შეცდომა გადახდის ჩანაწერის წაშლისას");
+    } finally {
+      setProcessing(null);
+    }
+  };
+
+  // ტაიმერის დაწყების ფუნქცია
+  const handleStartTimer = async (chatId: string) => {
+    if (!user || !user.isAdmin) return;
+    
+    try {
+      setProcessing(chatId);
+      
+      // ჯერ შევამოწმოთ არის თუ არა ადმინისტრატორი ჩატში
+      const chatDocRef = doc(db, "chats", chatId);
+      const chatDoc = await getDoc(chatDocRef);
+      
+      if (!chatDoc.exists()) {
+        throw new Error("ჩატი ვერ მოიძებნა");
+      }
+      
+      const chatData = chatDoc.data();
+      
+      // შევამოწმოთ არის თუ არა ადმინი ჩატის მონაწილე
+      if (!chatData.participants.includes(user.id)) {
+        // თუ არ არის, ჯერ დავამატოთ ადმინი ჩატში
+        console.log("ადმინისტრატორი ჯერ არ არის ჩატში, ვამატებთ...");
+        
+        await updateDoc(chatDocRef, {
+          adminJoined: true,
+          participants: [...chatData.participants, user.id],
+          participantNames: {
+            ...chatData.participantNames,
+            [user.id]: user.name
+          },
+          participantPhotos: {
+            ...chatData.participantPhotos,
+            [user.id]: user.photoURL || ""
+          }
+        });
+        
+        console.log("ადმინისტრატორი წარმატებით დაემატა ჩატში");
+      }
+      
+      // გამოვიძახოთ Cloud Function ტაიმერის დასაწყებად
+      try {
+        const startTimerFunction = httpsCallable(functions, 'startTransferTimer');
+        const result = await startTimerFunction({
+          chatId
+        });
+        
+        // სერვერიდან მიღებული მონაცემები
+        const data = result.data as { success: boolean, transferReadyTime: number };
+        
+        if (data.success) {
+          alert("ტაიმერი წარმატებით დაიწყო!");
+          
+          // ლოკალური სტეიტის განახლება ამ ჩატისთვის
+          setChatTimerStatus(prevStatus => ({
+            ...prevStatus,
+            [chatId]: true
+          }));
+        } else {
+          console.warn("სერვერზე ტაიმერის დაწყება ვერ მოხერხდა");
+        }
+      } catch (functionError) {
+        console.error("Cloud Function-ის გამოძახება წარუმატებელია:", functionError);
+        throw functionError; // გადავაგდოთ შეცდომა, რადგან ვერ შევძელით ტაიმერის დაწყება
+      }
+      
+    } catch (error) {
+      console.error("Error starting timer:", error);
+      alert(`ტაიმერის დაწყება ვერ მოხერხდა: ${error instanceof Error ? error.message : "უცნობი შეცდომა"}`);
     } finally {
       setProcessing(null);
     }
@@ -701,7 +782,7 @@ export default function AdminChatList({
               className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-blue-500 transition-colors duration-150"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1.5" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M10 2a4 4 0 00-4 4v1H5a1 1 0 00-.994.89l-1 9A1 1 0 004 18h12a1 1 0 00.994-1.11l-1-9A1 1 0 0015 7h-1V6a4 4 0 00-4-4zm2 5V6a2 2 0 10-4 0v1h4zm-6 3a1 1 0 112 0 1 1 0 01-2 0zm7-1a1 1 0 100 2 1 1 0 000-2z" clipRule="evenodd" />
+                <path fillRule="evenodd" d="M10 2a4 4 0 00-4 4v1H5a1 1 0 00-.994.89l-1 9A1 1 0 004 18h12a1 1 0 00.994-1.11l-1-9A1 1 0 0015 7h-1V6a4 4 0 00-4-4zm2 5V6a2 2 0 10-4 0v1h4zm-6 3a1 1 0 112 0 1 1 0 01-2 0zm7-1a1 1 0 100 2 1 1 0 000-2H9z" clipRule="evenodd" />
               </svg>
               პროდუქტების მართვა
             </button>
@@ -800,6 +881,22 @@ export default function AdminChatList({
                                 <span className="text-purple-600 font-medium">გამყიდველი:</span>
                                 <span className="ml-1">{payment.sellerName || "N/A"}</span>
                               </div>
+                              <div className="flex items-center mt-1.5">
+                                {chatTimerStatus[payment.chatId] ? (
+                                  <div className="flex items-center text-xs">
+                                    <div className="relative">
+                                      <div className="h-3 w-3 bg-green-500 rounded-full animate-pulse"></div>
+                                      <span className="absolute -top-1 -right-1 h-2 w-2 bg-green-300 rounded-full"></span>
+                                    </div>
+                                    <span className="ml-1.5 text-green-600 font-medium">ტაიმერი აქტიურია</span>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center text-xs">
+                                    <div className="h-3 w-3 bg-gray-300 rounded-full"></div>
+                                    <span className="ml-1.5 text-gray-500">ტაიმერი არ არის აქტიური</span>
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           </td>
                           <td className="px-4 py-4 border-r border-gray-200">
@@ -835,6 +932,13 @@ export default function AdminChatList({
                                 className="px-3 py-1 bg-green-500 text-white text-xs font-medium rounded hover:bg-green-600 transition-colors"
                               >
                                 ჩატში
+                              </button>
+                              <button 
+                                onClick={() => handleStartTimer(payment.chatId)}
+                                disabled={processing === payment.id || chatTimerStatus[payment.chatId]}
+                                className={`px-3 py-1 ${chatTimerStatus[payment.chatId] ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-500 hover:bg-blue-600'} text-white text-xs font-medium rounded transition-colors`}
+                              >
+                                {chatTimerStatus[payment.chatId] ? 'აქტიურია' : 'დაწყება'}
                               </button>
                               <button 
                                 className="px-3 py-1 bg-gray-500 text-white text-xs font-medium rounded hover:bg-gray-600 transition-colors"

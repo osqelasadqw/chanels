@@ -58,6 +58,7 @@ export interface Chat {
   timerActive?: boolean;
   timerStartDate?: number;
   timerEndDate?: number;
+  managerRightsAssigned?: boolean;
 }
 
 export interface ChatState {

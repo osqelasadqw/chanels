@@ -75,20 +75,27 @@ export const createPaymentSessionHttp = onRequest(
       logger.info(`Product price: $${productPrice}, name: ${productName}`);
 
       const serviceFeePercent = 0.08; // 8%
-      const minServiceFee = 3; // $3 minimum
-      const serviceFee = Math.max(productPrice * serviceFeePercent, minServiceFee);
-      const roundedServiceFee = Math.round(serviceFee * 100) / 100;
+      let calculatedServiceFee = productPrice * serviceFeePercent;
 
-      logger.info(`Calculated service fee: $${roundedServiceFee} (${serviceFeePercent * 100}% of $${productPrice}, min $${minServiceFee})`);
+      // თუ 8% 3 დოლარზე ნაკლებია, საკომისიო იქნება 3 დოლარი
+      if (calculatedServiceFee < 3) {
+        calculatedServiceFee = 3;
+      }
+      
+      // დამრგვალება ორ ათწილადამდე
+      const roundedServiceFee = Math.round(calculatedServiceFee * 100) / 100;
 
-      const totalAmount = productPrice + roundedServiceFee;
+      logger.info(`Calculated service fee: $${roundedServiceFee} (Logic: 8% of $${productPrice}, min $3)`);
+
+      // მომხმარებელი იხდის მხოლოდ სერვისის საკომისიოს
+      const totalAmount = roundedServiceFee;
       const roundedTotalAmount = Math.round(totalAmount * 100) / 100;
 
-      logger.info(`Total amount: $${roundedTotalAmount} (Product $${productPrice} + Fee $${roundedServiceFee})`);
+      logger.info(`Total amount: $${roundedTotalAmount} (Only service fee: $${roundedServiceFee})`);
 
       const priceInCents = Math.round(roundedTotalAmount * 100);
       const currency = "usd";
-      const productDescription = `${productName} + ${serviceFeePercent * 100}% escrow service fee`;
+      const productDescription = `${productName} - ${serviceFeePercent * 100}% სერვისის საკომისიო`;
 
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ["card"],
@@ -97,7 +104,7 @@ export const createPaymentSessionHttp = onRequest(
             price_data: {
               currency: currency,
               product_data: {
-                name: `${productName} + Escrow Service Fee`,
+                name: `${productName} - სერვისის საკომისიო`,
                 description: productDescription,
               },
               unit_amount: priceInCents,
@@ -188,15 +195,29 @@ export const stripeWebhook = onRequest(
 
         if (session.payment_status === "paid") {
           const chatId = session.metadata?.chatId;
-          const userId = session.metadata?.userId;
+          const buyerId = session.metadata?.userId;
           const productId = session.metadata?.productId;
           const serviceFee = parseFloat(session.metadata?.serviceFee || "0");
 
           if (chatId) {
-            logger.info(`Payment completed for chat: ${chatId}, user: ${userId}, product: ${productId}, fee: $${serviceFee}`);
+            logger.info(`Payment completed for chat: ${chatId}, user: ${buyerId}, product: ${productId}, fee: $${serviceFee}`);
 
             try {
-              await admin.firestore().collection("chats").doc(chatId).update({
+              const chatDocRef = admin.firestore().collection("chats").doc(chatId);
+              const chatDocSnapshot = await chatDocRef.get();
+              
+              let effectiveSellerId: string | undefined = undefined;
+              const currentChatData = chatDocSnapshot.exists ? chatDocSnapshot.data()! : null;
+
+              if (currentChatData) {
+                if (currentChatData.sellerId) {
+                  effectiveSellerId = currentChatData.sellerId;
+                } else if (currentChatData.participants && buyerId) {
+                  effectiveSellerId = currentChatData.participants.find((pId: string) => pId !== buyerId);
+                }
+              }
+
+              const updatePayload: { [key: string]: any } = {
                 paymentCompleted: true,
                 paymentCompletedAt: Date.now(),
                 paymentStatus: "completed",
@@ -204,30 +225,31 @@ export const stripeWebhook = onRequest(
                 feeAmount: serviceFee,
                 totalAmount: parseFloat(session.metadata?.totalAmount || "0"),
                 productPrice: parseFloat(session.metadata?.productPrice || "0"),
-              });
-              logger.info(`Payment status updated for chat: ${chatId}`);
+              };
 
-              const userDoc = await admin.firestore().collection("users").doc(userId || "").get();
-              const buyerName = userDoc.exists ? userDoc.data()?.name || "Unknown User" : "Unknown User";
-
-              const chatDoc = await admin.firestore().collection("chats").doc(chatId || "").get();
-              const chatData = chatDoc.exists ? chatDoc.data() : {};
-              const chatName = chatData?.name || "Chat";
-
-              let sellerId = chatData?.sellerId || "";
-              if (!sellerId && chatData?.participants) {
-                sellerId = chatData.participants.find((id: string) => id !== userId) || "";
+              if (effectiveSellerId && (!currentChatData || !currentChatData.sellerId)) {
+                updatePayload.sellerId = effectiveSellerId;
               }
 
+              await chatDocRef.update(updatePayload);
+              logger.info(`Payment status updated for chat: ${chatId}.${updatePayload.sellerId ? ` SellerId was also updated to ${updatePayload.sellerId}.` : ''}`);
+              
+              const userDoc = await admin.firestore().collection("users").doc(buyerId || "").get();
+              const buyerName = userDoc.exists ? userDoc.data()?.name || "Unknown User" : "Unknown User";
+
+              const updatedChatInfoDoc = await chatDocRef.get();
+              const chatDataForPaidRecord = updatedChatInfoDoc.exists ? updatedChatInfoDoc.data()! : {};
+              const chatName = chatDataForPaidRecord.name || "Chat";
+              
               let sellerName = "Unknown Seller";
-              if (sellerId) {
-                const sellerDoc = await admin.firestore().collection("users").doc(sellerId).get();
+              if (effectiveSellerId) {
+                const sellerDoc = await admin.firestore().collection("users").doc(effectiveSellerId).get();
                 sellerName = sellerDoc.exists ? sellerDoc.data()?.name || "Unknown Seller" : "Unknown Seller";
               }
 
               await admin.firestore().collection("paid").add({
                 chatId: chatId,
-                userId: userId,
+                userId: buyerId,
                 productId: productId,
                 paymentSessionId: session.id,
                 amount: serviceFee,
@@ -239,7 +261,7 @@ export const stripeWebhook = onRequest(
                 createdAt: Date.now(),
                 stripeSessionId: session.id,
                 buyerName: buyerName,
-                sellerId: sellerId,
+                sellerId: effectiveSellerId,
                 sellerName: sellerName,
                 chatName: chatName,
               });
@@ -254,7 +276,7 @@ export const stripeWebhook = onRequest(
                   chatId: chatId || "",
                   productId: productId || "",
                   productName: productName,
-                  buyerId: userId || "",
+                  buyerId: buyerId || "",
                   buyerName: buyerName,
                   paymentSessionId: session.id,
                   paymentAmount: serviceFee,
@@ -343,8 +365,17 @@ export const startTransferTimer = onCall(
 
       const chatData = chatDoc.data();
 
-      if (!chatData?.adminJoined) {
-        throw new HttpsError("failed-precondition", "No admin has joined this chat yet.");
+      // შევამოწმოთ, რომ თვითონ ადმინი იწყებს ტაიმერს
+      const userId = auth.uid;
+      const userDoc = await admin.firestore().collection("users").doc(userId).get();
+      
+      if (!userDoc.exists) {
+        throw new HttpsError("not-found", "User not found.");
+      }
+      
+      const userData = userDoc.data();
+      if (!userData?.isAdmin) {
+        throw new HttpsError("permission-denied", "Only admins can start the transfer timer.");
       }
 
       if (!chatData?.paymentCompleted) {
@@ -360,6 +391,8 @@ export const startTransferTimer = onCall(
         transferReadyTime: transferReadyTime,
         transferStatus: "pending",
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        adminJoined: true, // ყოველთვის დავაყენოთ ეს ფლაგი
+        adminId: userId // შევინახოთ ადმინის ID
       });
 
       const chatAdminId = chatData?.adminId;
@@ -376,21 +409,9 @@ export const startTransferTimer = onCall(
         }
       }
 
-      const rtdbRef = admin.database().ref(`messages/${chatId}`);
-      await rtdbRef.push({
-        text: "⏱️ Primary ownership rights transfer timer started. The transfer will be possible in 7 days.",
-        senderId: "system",
-        senderName: "System",
-        timestamp: now,
-        isSystem: true,
-        senderPhotoURL: adminPhotoURL,
-      });
-
-      logger.info(`Transfer timer started for chat ${chatId}, will be ready at: ${new Date(transferReadyTime).toISOString()}`);
-
       return {
         success: true,
-        transferReadyTime: transferReadyTime,
+        transferReadyTime: transferReadyTime
       };
     } catch (error) {
       logger.error("Error starting transfer timer:", error);
@@ -502,7 +523,7 @@ export const inviteAdminToPrivateChat = onCall(
 
       const rtdbRef = admin.database().ref(`messages/${newChatId}`);
       const welcomeMessage = {
-        text: initialMessage || `Seller has invited escrow agent to assist with Transaction #${transactionId || chatId.substring(0, 6)}.\nInvited admin: ${adminEmail}`,
+        text: initialMessage || `გამყიდველმა მოიწვია ესქროუ აგენტი ტრანზაქციისთვის #${transactionId || chatId.substring(0, 6)}.\nმოწვეული ადმინი: ${adminEmail}`,
         senderId: "system",
         senderName: "System",
         timestamp: now,
@@ -523,7 +544,7 @@ export const inviteAdminToPrivateChat = onCall(
 
       const originalChatRtdbRef = admin.database().ref(`messages/${chatId}`);
       await originalChatRtdbRef.push({
-        text: `The seller has invited an escrow agent (${adminData.name}) to assist with this transaction.`,
+        text: `გამყიდველმა მოიწვია ესქროუ აგენტი (${adminData.name}) ამ ტრანზაქციის დასახმარებლად.`,
         senderId: "system",
         senderName: "System",
         timestamp: now,
@@ -540,6 +561,72 @@ export const inviteAdminToPrivateChat = onCall(
     } catch (error) {
       logger.error("Error inviting admin to private chat:", error);
       throw new HttpsError("internal", "Failed to invite admin: " + (error instanceof Error ? error.message : "Unknown error"));
+    }
+  }
+);
+
+// Function for an admin to officially join a chat
+export const adminJoinChat = onCall(
+  {enforceAppCheck: false},
+  async (request) => {
+    try {
+      const auth = request.auth;
+      if (!auth) {
+        throw new HttpsError("unauthenticated", "User must be authenticated.");
+      }
+
+      const {chatId} = request.data;
+
+      if (!chatId) {
+        throw new HttpsError("invalid-argument", "Chat ID is required.");
+      }
+
+      // Get user data to confirm they are an admin
+      const userId = auth.uid;
+      const userDoc = await admin.firestore().collection("users").doc(userId).get();
+      
+      if (!userDoc.exists) {
+        throw new HttpsError("not-found", "User not found.");
+      }
+      
+      const userData = userDoc.data();
+      if (!userData?.isAdmin) {
+        throw new HttpsError("permission-denied", "Only admins can join as an admin.");
+      }
+
+      const chatDoc = await admin.firestore().collection("chats").doc(chatId).get();
+      if (!chatDoc.exists) {
+        throw new HttpsError("not-found", "Chat not found.");
+      }
+
+      const chatData = chatDoc.data();
+      
+      // Check if the admin is assigned to this chat
+      if (chatData?.adminId && chatData.adminId !== userId) {
+        throw new HttpsError("permission-denied", "Another admin is already assigned to this chat.");
+      }
+
+      const now = Date.now();
+      const adminName = userData.name || "Admin";
+      const adminPhotoURL = userData.adminPhotoURL || userData.photoURL || null;
+
+      await admin.firestore().collection("chats").doc(chatId).update({
+        adminJoined: true,
+        adminJoinedAt: now,
+        adminId: userId,
+        adminPhotoURL: adminPhotoURL,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      logger.info(`Admin ${userId} (${adminName}) joined chat ${chatId} at ${new Date(now).toISOString()}`);
+
+      return {
+        success: true,
+        joinedAt: now,
+      };
+    } catch (error) {
+      logger.error("Error joining chat as admin:", error);
+      throw new HttpsError("internal", "Failed to join chat: " + (error instanceof Error ? error.message : "Unknown error"));
     }
   }
 );
@@ -571,6 +658,199 @@ export const getAdminEmails = onCall(
     } catch (error) {
       logger.error("Error fetching admin emails:", error);
       throw new HttpsError("internal", "Failed to fetch admin emails: " + (error instanceof Error ? error.message : "Unknown error"));
+    }
+  }
+);
+
+// Function for seller to confirm offer
+export const confirmSellerOffer = onCall(
+  {enforceAppCheck: false}, // Consider enabling App Check for production
+  async (request) => {
+    try {
+      const auth = request.auth;
+      if (!auth) {
+        throw new HttpsError("unauthenticated", "User must be authenticated.");
+      }
+
+      const {chatId} = request.data;
+
+      if (!chatId || typeof chatId !== "string") {
+        throw new HttpsError("invalid-argument", "Chat ID is required and must be a string.");
+      }
+
+      const currentUserId = auth.uid;
+      const chatDocRef = admin.firestore().collection("chats").doc(chatId);
+      const chatDoc = await chatDocRef.get();
+
+      if (!chatDoc.exists) {
+        throw new HttpsError("not-found", "Chat not found.");
+      }
+
+      const chatData = chatDoc.data();
+      if (!chatData) {
+        throw new HttpsError("data-loss", "Chat data is missing.");
+      }
+      let sellerId = chatData.sellerId;
+
+      // If sellerId is not directly set, but the current user is a participant,
+      // and there isn't a different buyerId specified, assume current user is the seller.
+      // This aligns with the scenario where a chat is created and sellerId might not be immediately set.
+      if (!sellerId && chatData.participants.includes(currentUserId)) {
+        // Check if there's a buyerId and if it's different from the current user.
+        // If buyerId is the same as currentUserId, then this user is the buyer, not the seller.
+        if (chatData.buyerId && chatData.buyerId === currentUserId) {
+          // This case should ideally be caught by the buyer check later, 
+          // but it's good to be explicit.
+          throw new HttpsError("permission-denied", "Buyer cannot confirm the offer for the seller.");
+        } else {
+          // If no buyerId, or buyerId is different, assign current user as sellerId
+          sellerId = currentUserId;
+          // Optionally, update the chat document with this sellerId if it's a permanent assignment
+          // await chatDocRef.update({ sellerId: currentUserId }); 
+          // For now, we'll just use it for this function's logic.
+        }
+      }
+
+      // Basic check: if sellerId field exists (or was just set), current user must match it
+      if (sellerId && sellerId !== currentUserId) {
+        throw new HttpsError("permission-denied", "Only the seller can confirm the offer.");
+      }
+
+      // More robust check if sellerId is not directly set but can be inferred from participants
+      // This logic depends on how sellerId is determined in your application
+      // This part needs to align with your app's logic for identifying the seller.
+      // For now, we'll assume if sellerId is not present, we look at participants.
+      // A common pattern is that the chat initiator (often the buyer) is one participant,
+      // and the product owner (seller) is the other.
+      // If there's no clear `buyerId` in chatData, this check is more complex.
+      // Let's assume for this example that if currentUserId is a participant and not explicitly a buyer, they could be the seller.
+      // This needs to be refined based on your exact data model.
+      if (!chatData.participants.includes(currentUserId)) {
+        throw new HttpsError("permission-denied", "User is not a participant in this chat.");
+      }
+      // If there are two participants and the current user is one of them,
+      // and there's no explicit buyerId field, we might infer this user is the seller.
+      // This is a simplification. In a real app, you'd have a clearer way to identify the seller.
+      if (chatData.participants.length === 2 && !chatData.buyerId) {
+        // Potentially the seller, let it pass for now.
+        // Consider adding a specific check if product owner ID is stored in chatData.
+      } else if (chatData.buyerId && chatData.buyerId === currentUserId) {
+        throw new HttpsError("permission-denied", "Buyer cannot confirm the offer for the seller.");
+      }
+      // If not explicitly the sellerId and no other way to confirm, deny.
+      // This logic is simplified. You should ensure sellerId is reliably set or inferable.
+      if (!sellerId) {
+        // If sellerId is not set after the above logic, and not in participants either (though covered above), deny.
+        throw new HttpsError("failed-precondition", "Seller information is missing in the chat data and could not be inferred.");
+      }
+
+      if (chatData?.sellerConfirmed) {
+        logger.info(`Offer for chat ${chatId} already confirmed by seller.`);
+        // Optionally, you could throw an error or return a specific status
+        // throw new HttpsError("failed-precondition", "Offer already confirmed.");
+        return {success: true, message: "Offer already confirmed."};
+      }
+
+      await chatDocRef.update({
+        sellerConfirmed: true,
+        sellerConfirmedAt: admin.firestore.FieldValue.serverTimestamp(), // Use server timestamp
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      logger.info(`Seller ${currentUserId} confirmed offer for chat ${chatId}`);
+
+      return {success: true};
+    } catch (error: unknown) {
+      logger.error("Error confirming seller offer:", error);
+      if (error instanceof HttpsError) {
+        throw error;
+      }
+      throw new HttpsError("internal", "Failed to confirm seller offer: " + (error instanceof Error ? error.message : "Unknown error"));
+    }
+  }
+);
+
+// Function to assign manager rights to an escrow agent
+export const assignManagerRightsToAdmin = onCall(
+  {enforceAppCheck: false}, // Consider App Check for production
+  async (request) => {
+    try {
+      const auth = request.auth;
+      if (!auth) {
+        throw new HttpsError("unauthenticated", "User must be authenticated.");
+      }
+
+      const { chatId, adminEmail } = request.data;
+
+      if (!chatId || typeof chatId !== "string") {
+        throw new HttpsError("invalid-argument", "Chat ID is required and must be a string.");
+      }
+      if (!adminEmail || typeof adminEmail !== "string") {
+        throw new HttpsError("invalid-argument", "Admin email is required and must be a string.");
+      }
+
+      const currentUserId = auth.uid;
+      const chatDocRef = admin.firestore().collection("chats").doc(chatId);
+      const chatDoc = await chatDocRef.get();
+
+      if (!chatDoc.exists) {
+        throw new HttpsError("not-found", "Chat not found.");
+      }
+
+      const chatData = chatDoc.data();
+      if (!chatData) {
+        throw new HttpsError("data-loss", "Chat data is missing.");
+      }
+
+      // Verify that the caller is the seller of the chat
+      if (chatData.sellerId !== currentUserId) {
+        throw new HttpsError("permission-denied", "Only the seller can assign manager rights.");
+      }
+
+      // Find the admin user by email
+      const adminUsersSnapshot = await admin.firestore().collection("users").where("email", "==", adminEmail).where("isAdmin", "==", true).get();
+
+      if (adminUsersSnapshot.empty) {
+        throw new HttpsError("not-found", `Admin user with email ${adminEmail} not found or is not an admin.`);
+      }
+      const adminUserDoc = adminUsersSnapshot.docs[0];
+      const adminId = adminUserDoc.id;
+
+      const now = Date.now();
+      await chatDocRef.update({
+        escrowAgentAdminId: adminId,
+        escrowAgentAdminEmail: adminEmail,
+        escrowAgentAssignedAt: now,
+        managerRightsAssigned: true,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      logger.info(`Manager rights for chat ${chatId} assigned to admin ${adminId} (${adminEmail}) by seller ${currentUserId}.`);
+
+      // Create a notification for the admin
+      await admin.firestore().collection("admin_notifications").add({
+        type: "manager_rights_assigned",
+        chatId: chatId,
+        originalChatId: chatData.originalChatId || chatId, // If it's a private admin chat, link to original
+        adminId: adminId,
+        adminEmail: adminEmail,
+        assignedBySellerId: currentUserId,
+        productName: chatData.productName || "Unknown Product",
+        timestamp: now,
+        read: false,
+        priority: "high",
+        message: `Seller ${auth.token.name || currentUserId} has assigned you manager rights for chat: ${chatData.name || chatId}. Product: ${chatData.productName || "N/A"}.`,
+      });
+      logger.info(`Admin notification created for manager rights assignment in chat ${chatId} to admin ${adminId}.`);
+
+      return { success: true, message: `Manager rights assigned to ${adminEmail}.` };
+
+    } catch (error: unknown) {
+      logger.error("Error assigning manager rights to admin:", error);
+      if (error instanceof HttpsError) {
+        throw error;
+      }
+      throw new HttpsError("internal", "Failed to assign manager rights: " + (error instanceof Error ? error.message : "Unknown error"));
     }
   }
 );
