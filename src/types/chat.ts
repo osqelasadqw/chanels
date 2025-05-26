@@ -34,6 +34,7 @@ export interface Chat {
   isPrivateWithAdmin?: boolean;
   isPrivateWithUser?: boolean;
   isEscrowChat?: boolean;
+  isPrivateEscrowChat?: boolean;
   originalChatId?: string;
   paymentCompleted?: boolean;
   paymentCompletedAt?: number;

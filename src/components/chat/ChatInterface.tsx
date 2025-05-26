@@ -10,6 +10,7 @@ import { doc, getDoc, updateDoc, onSnapshot } from "firebase/firestore";
 import { addDoc, collection } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import React from "react";
+import EmojiPicker, { EmojiClickData } from "emoji-picker-react";
 
 interface ChatInterfaceProps {
   chatId: string;
@@ -34,6 +35,11 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
   const [escrowAgentAssigned, setEscrowAgentAssigned] = useState<boolean>(false); // New state
   const [selectedAgentEmail, setSelectedAgentEmail] = useState<string>("");  // State for selected agent email
   const [showAgentEmailDropdown, setShowAgentEmailDropdown] = useState<boolean>(false);
+  const [assigningManagerRights, setAssigningManagerRights] = useState<boolean>(false); // State for loading
+  const [confirmingOffer, setConfirmingOffer] = useState<boolean>(false); // New state for Confirm Offer loading
+  const [returningPayment, setReturningPayment] = useState<boolean>(false); // New state for Return Payment loading
+  const [showEmojiPicker, setShowEmojiPicker] = useState<boolean>(false); // სმაილების გამოჩენის კონტროლი
+  const emojiPickerRef = useRef<HTMLDivElement>(null); // სმაილების კონტეინერის რეფერენსი
   
   // ტაიმერის სტეიტები
   const [transferTimerStarted, setTransferTimerStarted] = useState<boolean>(false);
@@ -239,6 +245,14 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   };
+  
+  // ემოჯის დაჭერის დამუშავების ფუნქცია
+  const handleEmojiClick = (emojiObject: EmojiClickData) => {
+    // დავამატოთ ემოჯი მიმდინარე შეტყობინებაში კურსორის პოზიციაზე ან ბოლოში
+    const emoji = emojiObject.emoji;
+    setNewMessage(prev => prev + emoji);
+    setShowEmojiPicker(false); // დავხუროთ ემოჯის არჩევის პანელი
+  };
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -420,6 +434,8 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
     }
 
     try {
+      setAssigningManagerRights(true); // Set loading state to true at the beginning
+      
       const assignRightsFunction = httpsCallable(functions, 'assignManagerRightsToAdmin');
       await assignRightsFunction({ chatId, adminEmail });
       
@@ -435,6 +451,8 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
         setError("Failed to assign manager rights. Please try again.");
       }
       alert(`Failed to assign manager rights: ${err instanceof Error ? err.message : "Unknown error"}`);
+    } finally {
+      setAssigningManagerRights(false); // Reset loading state when done (success or failure)
     }
   };
 
@@ -577,7 +595,7 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
             {paymentCompleted ? (
               <p className="text-green-700">
                 {isSeller ? 
-                  "The buyer has paid. Now, you need to designate the escrow agent's account as manager. The escrow agent's email is indicated below. If you don't have a button for transferring administrative rights, that means you have not yet linked the channel with the brand's account. Follow these instructions in order to link your account. You have 23:59:30 to do this, after which we will offer the buyer a refund." :
+                  "The buyer has paid. Now, you need to designate the escrow agent's account as manager. The escrow agent's email is indicated below. If you don't have a button for transferring administrative rights, that means you have not yet linked the channel with the brand's account. Follow these instructions in order to link your account. " :
                   "You've paid, and we've notified the seller. We're waiting for the seller to designate the escrow agent as manager. The seller has 23:56:08 left to do this, after which we will offer you a refund"
                 }
               </p>
@@ -593,9 +611,17 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
             <div className="mt-4 border-t border-gray-200 pt-4">
               <button 
                 onClick={handleSellerConfirm}
-                className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-all"
+                disabled={confirmingOffer}
+                className={`w-full bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-all ${confirmingOffer ? 'opacity-80 cursor-not-allowed' : ''}`}
               >
-                Confirm Offer
+                {confirmingOffer ? (
+                  <div className="flex items-center justify-center">
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-2"></div>
+                    <span>Confirming...</span>
+                  </div>
+                ) : (
+                  "Confirm Offer"
+                )}
               </button>
               <div className="mt-2 text-xs text-gray-500">
                 By confirming this offer, you agree to the transaction terms and will provide the account details after payment.
@@ -829,9 +855,17 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
             <div className="mt-4 border-t border-gray-200 pt-4">
               <button 
                 onClick={handleSellerConfirm}
-                className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-all"
+                disabled={confirmingOffer}
+                className={`w-full bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-all ${confirmingOffer ? 'opacity-80 cursor-not-allowed' : ''}`}
               >
-                Confirm Offer
+                {confirmingOffer ? (
+                  <div className="flex items-center justify-center">
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-2"></div>
+                    <span>Confirming...</span>
+                  </div>
+                ) : (
+                  "Confirm Offer"
+                )}
               </button>
               <div className="mt-2 text-xs text-gray-500">
                 By confirming this offer, you agree to the transaction terms and will provide the account details after payment.
@@ -1112,8 +1146,8 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
   const handleSellerConfirm = async () => {
     if (!user || !chatId) return;
 
-    // Display loading/processing state if needed
-    // setIsLoading(true); // Example: You might want a loading state
+    // Display loading/processing state
+    setConfirmingOffer(true);
 
     try {
       const confirmOfferFunction = httpsCallable(functions, 'confirmSellerOffer');
@@ -1137,7 +1171,7 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
         setError("Failed to confirm offer. Please check your connection and try again.");
       }
     } finally {
-      // setIsLoading(false); // Example: Reset loading state
+      setConfirmingOffer(false);
     }
   };
 
@@ -1336,6 +1370,9 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
     if (!user || !chatId) return;
     
     try {
+      // Set loading state
+      setReturningPayment(true);
+      
       // გამოვიძახოთ Cloud Function ტაიმერის დასაწყებად
       const startTimerFunction = httpsCallable(functions, 'startTransferTimer');
       const result = await startTimerFunction({
@@ -1358,6 +1395,8 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
       
     } catch (error) {
       alert(`Failed to start transfer timer: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      setReturningPayment(false);
     }
   };
   
@@ -1409,13 +1448,17 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
       if (showAgentEmailDropdown && !target.closest('.agent-email-dropdown-container')) {
         setShowAgentEmailDropdown(false);
       }
+      // დავამატოთ ემოჯის არჩევის პანელის დახურვა
+      if (showEmojiPicker && !target.closest('.emoji-picker-container') && !target.closest('.emoji-picker-trigger')) {
+        setShowEmojiPicker(false);
+      }
     };
 
     document.addEventListener('mousedown', handleClickOutside);
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [showPaymentDropdown, showAgentEmailDropdown]);
+  }, [showPaymentDropdown, showAgentEmailDropdown, showEmojiPicker]);
 
   return (
     <div className="flex flex-col w-full h-full overflow-hidden">
@@ -1433,8 +1476,8 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
             {/* დავტოვოთ გადახდის სტატუსის შეტყობინება */}
             <PaymentStatusMessage />
 
-            {/* Timer component - MOVED UP and its own logic will handle display */}
-            <TransferTimer />
+            {/* Timer component - REMOVE FROM HERE */}
+            {/* <TransferTimer /> */}
 
             {/* Messages will be mapped directly here. The parent div (overflow-y-auto) has space-y-4. */}
             {messages.map((message, index) => {
@@ -1444,6 +1487,11 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
               return (
                 <React.Fragment key={message.id}>
                   <MessageItem message={message} />
+                  
+                  {/* Show timer after automatic message */}
+                  {isRequestOrEscrowMessage && (
+                    <TransferTimer />
+                  )}
 
                   {isRequestOrEscrowMessage && showEscrowDetailsBlock && (
                     <div className="md:w-2/3 lg:w-1/2 mr-auto p-3"> {/* Removed bg-yellow-50 text-yellow-800 border border-yellow-200 rounded-lg shadow-sm */}
@@ -1490,13 +1538,32 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
                           {!escrowAgentAssigned && (
                             <button
                               onClick={handleAssignManagerRights}
-                              className="px-4 py-2 bg-orange-500 text-white text-sm font-medium rounded-lg hover:bg-orange-600 transition-colors whitespace-nowrap"
+                              disabled={assigningManagerRights}
+                              className={`px-4 py-2 bg-orange-500 text-white text-sm font-medium rounded-lg hover:bg-orange-600 transition-colors whitespace-nowrap ${assigningManagerRights ? 'opacity-80 cursor-not-allowed' : ''}`}
                             >
-                             Assigned manager's rights to the escrow agent
+                              {assigningManagerRights ? (
+                                <div className="flex items-center justify-center">
+                                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-2"></div>
+                                  <span>Assigning...</span>
+                                </div>
+                              ) : (
+                                "Assigned manager's rights to the escrow agent"
+                              )}
                             </button>
                           )}
-                          <button className="px-4 py-2 bg-red-500 text-white text-sm font-medium rounded-lg hover:bg-red-600 transition-colors whitespace-nowrap">
-                            Return payment to the buyer (cancel the transaction)
+                          <button 
+                            onClick={handleStartTransferTimer}
+                            disabled={returningPayment}
+                            className={`px-4 py-2 bg-red-500 text-white text-sm font-medium rounded-lg hover:bg-red-600 transition-colors whitespace-nowrap ${returningPayment ? 'opacity-80 cursor-not-allowed' : ''}`}
+                          >
+                            {returningPayment ? (
+                              <div className="flex items-center justify-center">
+                                <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-2"></div>
+                                <span>Processing...</span>
+                              </div>
+                            ) : (
+                              "Return payment to the buyer (cancel the transaction)"
+                            )}
                           </button>
                           <button
                             onClick={handleContactEscrowAgent}
@@ -1528,38 +1595,34 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
       <form onSubmit={handleSendMessage} className="bg-white p-4 border-t">
         <div className="flex items-center gap-2">
           <div className="flex-1 flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-full bg-gray-50 hover:bg-white focus-within:bg-white focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-100 transition-all duration-200 shadow-sm">
-            <button
-              type="button"
-              className="text-gray-400 hover:text-indigo-500 transition-colors"
-              title="Add emoji"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15.182 15.182a4.5 4.5 0 01-6.364 0M21 12a9 9 0 11-18 0 9 9 0 0118 0zM9.75 9.75c0 .414-.168.75-.375.75S9 10.164 9 9.75 9.168 9 9.375 9s.375.336.375.75zm-.375 0h.008v.015h-.008V9.75zm5.625 0c0 .414-.168.75-.375.75s-.375-.336-.375-.75.168-.75.375-.75.375.336.375.75zm-.375 0h.008v.015h-.008V9.75z" />
-              </svg>
-            </button>
+            <div className="relative emoji-picker-container">
+              <button
+                type="button"
+                className="text-gray-400 hover:text-indigo-500 transition-colors emoji-picker-trigger"
+                title="Add emoji"
+                onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15.182 15.182a4.5 4.5 0 01-6.364 0M21 12a9 9 0 11-18 0 9 9 0 0118 0zM9.75 9.75c0 .414-.168.75-.375.75S9 10.164 9 9.75 9.168 9 9.375 9s.375.336.375.75zm-.375 0h.008v.015h-.008V9.75zm5.625 0c0 .414-.168.75-.375.75s-.375-.336-.375-.75.168-.75.375-.75.375.336.375.75zm-.375 0h.008v.015h-.008V9.75z" />
+                </svg>
+              </button>
+              {showEmojiPicker && (
+                <div 
+                  className="absolute bottom-10 left-0 z-10"
+                  ref={emojiPickerRef}
+                >
+                  <EmojiPicker
+                    onEmojiClick={handleEmojiClick}
+                    searchDisabled={false}
+                    width={300}
+                    height={400}
+                    skinTonesDisabled={true}
+                  />
+                </div>
+              )}
+            </div>
             
-            <button
-              type="button"
-              className="text-gray-400 hover:text-indigo-500 transition-colors"
-              title="Insert escrow request template"
-              onClick={() => {
-                setNewMessage(`🔒 Request to Purchase Octopus\nTransaction ID: 1736366\nTransaction Amount: $12\nPayment Method: Stripe\nThe buyer pays the cost of the channel + 8% ($3 minimum) service fee.\n\nThe seller confirms and agrees to use the escrow service.\n\nThe escrow agent verifies everything and assigns manager rights to the buyer.\n\nAfter 7 days (or sooner if agreed), the escrow agent removes other managers and transfers full ownership to the buyer.\n\nThe funds are then released to the seller. Payments are sent instantly via all major payment methods.`);
-              }}
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
-              </svg>
-            </button>
-            
-            <button
-              type="button"
-              className="text-gray-400 hover:text-indigo-500 transition-colors"
-              title="Attach file"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13" />
-              </svg>
-            </button>
+            {/* ბლოკის ლოგოს და ფაილის ატვირთვის ღილაკები წაშლილია */}
             
             <input
               type="text"

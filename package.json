@@ -17,6 +17,7 @@
     "@types/uuid": "^10.0.0",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
+    "emoji-picker-react": "^4.12.2",
     "firebase": "^11.7.1",
     "framer-motion": "^12.11.0",
     "lucide-react": "^0.509.0",

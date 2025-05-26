@@ -267,67 +267,9 @@ function EnhancedChatList({ onChatSelect, selectedChatId }: { onChatSelect: (cha
   const [chats, setChats] = useState<Chat[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [deletingChatId, setDeletingChatId] = useState<string | null>(null);
   const { user } = useAuth();
 
-  // Function to delete chat for the current user
-  const deleteChatForUser = async (chatId: string, e: React.MouseEvent) => {
-    e.stopPropagation(); // Stop click propagation to parent elements
-    
-    if (!user) return;
-    
-    // Confirmation dialog for full deletion
-    const confirmDelete = window.confirm("Are you sure you want to permanently delete this chat? This action will delete the chat for ALL participants and cannot be undone.");
-    if (!confirmDelete) return;
-
-    try {
-      setDeletingChatId(chatId);
-      
-      // Reference to the chat document in the main "chats" collection
-      const chatDocRef = doc(db, "chats", chatId);
-      
-      console.log(`Attempting to delete chat document: chats/${chatId}`);
-      
-      // Delete the chat document from the "chats" collection
-      await deleteDoc(chatDocRef);
-      
-      // Locally remove the chat from the UI
-      setChats(prevChats => prevChats.filter(chat => chat.id !== chatId));
-      
-      // Success message (toast)
-      const toastElement = document.createElement('div');
-      toastElement.className = 'fixed top-4 right-4 bg-green-500 text-white px-4 py-2 rounded-md shadow-lg z-50 flex items-center';
-      toastElement.innerHTML = `
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5 mr-2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-        Chat permanently deleted for all participants.
-      `;
-      document.body.appendChild(toastElement);
-      
-      setTimeout(() => {
-        toastElement.remove();
-      }, 3000);
-
-    } catch (err) {
-      console.error("Error deleting chat document:", err);
-      // Error message (toast)
-      const errorToast = document.createElement('div');
-      errorToast.className = 'fixed top-4 right-4 bg-red-500 text-white px-4 py-2 rounded-md shadow-lg z-50 flex items-center';
-      errorToast.innerHTML = `
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5 mr-2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
-        </svg>
-        Failed to delete chat. Please try again.
-      `;
-      document.body.appendChild(errorToast);
-      setTimeout(() => {
-        errorToast.remove();
-      }, 3000);
-    } finally {
-      setDeletingChatId(null);
-    }
-  };
+  // წაშლის ფუნქცია ამოღებულია მომხმარებლის უსაფრთხოების დაცვის მიზნით
 
   useEffect(() => {
     if (!user) return;
@@ -453,17 +395,7 @@ function EnhancedChatList({ onChatSelect, selectedChatId }: { onChatSelect: (cha
           return date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
         };
 
-        // If this chat is being hidden, skip rendering it
-        if (deletingChatId === chat.id) {
-          return (
-            <div key={chat.id} className="p-4 flex justify-center items-center">
-              <div className="animate-pulse flex items-center">
-                <div className="animate-spin mr-2 rounded-full h-5 w-5 border-t-2 border-b-2 border-indigo-600"></div>
-                <span className="text-gray-500 text-sm">Deleting conversation...</span>
-              </div>
-            </div>
-          );
-        }
+        // კოდის ნაწილი ჩატის წაშლის თაობაზე ამოღებულია
 
         const isSelected = selectedChatId === chat.id;
 
@@ -526,24 +458,7 @@ function EnhancedChatList({ onChatSelect, selectedChatId }: { onChatSelect: (cha
               )}
             </button>
             
-            {/* Delete chat button - improved styling */}
-            <button 
-              onClick={(e) => deleteChatForUser(chat.id, e)}
-              disabled={deletingChatId === chat.id}
-              className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-100 rounded-full transition-colors duration-150 z-10 opacity-0 group-hover:opacity-100 focus:opacity-100"
-              aria-label="Delete chat"
-            >
-              {deletingChatId === chat.id ? (
-                <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-              ) : (
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.8" stroke="currentColor" className="w-4 h-4">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-                </svg>
-              )}
-            </button>
+            {/* წაშლის ღილაკი წაიშალა მომხმარებლის უსაფრთხოების დაცვის მიზნით */}
           </div>
         );
       })}

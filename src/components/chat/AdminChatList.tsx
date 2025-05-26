@@ -935,10 +935,15 @@ export default function AdminChatList({
                               </button>
                               <button 
                                 onClick={() => handleStartTimer(payment.chatId)}
-                                disabled={processing === payment.id || chatTimerStatus[payment.chatId]}
+                                disabled={processing === payment.chatId || processing === payment.id || chatTimerStatus[payment.chatId]}
                                 className={`px-3 py-1 ${chatTimerStatus[payment.chatId] ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-500 hover:bg-blue-600'} text-white text-xs font-medium rounded transition-colors`}
                               >
-                                {chatTimerStatus[payment.chatId] ? 'აქტიურია' : 'დაწყება'}
+                                {processing === payment.chatId ? (
+                                  <div className="flex items-center justify-center">
+                                    <div className="animate-spin rounded-full h-3 w-3 border-2 border-white border-t-transparent mr-1"></div>
+                                    <span>...</span>
+                                  </div>
+                                ) : chatTimerStatus[payment.chatId] ? 'აქტიურია' : 'დაწყება'}
                               </button>
                               <button 
                                 className="px-3 py-1 bg-gray-500 text-white text-xs font-medium rounded hover:bg-gray-600 transition-colors"
