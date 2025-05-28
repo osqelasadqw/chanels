@@ -816,13 +816,23 @@ export const confirmPaymentReceived = onCall(
 
       const chatData = chatDoc.data();
 
-      // შევამოწმოთ, რომ მომხმარებელი ნამდვილად გამყიდველია
-      if (chatData?.sellerId !== userId) {
-        throw new HttpsError("permission-denied", "Only the seller can confirm payment receipt.");
+      // შევამოწმოთ, რომ მომხმარებელი ნამდვილად გამყიდველია ან ადმინი
+      if (chatData?.sellerId !== userId && !auth.token.admin) {
+        throw new HttpsError("permission-denied", "Only the seller or admin can confirm payment receipt.");
       }
 
       // შევამოწმოთ, რომ ჩატი სწორ სტატუსშია
-      if (chatData?.status !== "awaiting_seller_confirmation" || !chatData?.paymentConfirmedByBuyer) {
+      if (
+        // თუ სტატუსი არ არის awaiting_seller_confirmation
+        chatData?.status !== "awaiting_seller_confirmation" && 
+        // და ასევე არ არის რომელიმე სტატუსი სადაც მყიდველმა დაადასტურა გადახდა
+        !(
+          (chatData?.paymentConfirmedByBuyer === true || chatData?.buyerConfirmedPayment === true) && 
+          // და გამყიდველს ჯერ არ დაუდასტურებია მიღება
+          chatData?.sellerConfirmedReceipt !== true
+        )
+      ) {
+        logger.error(`[confirmPaymentReceived] Chat is not in correct state: status=${chatData?.status}, paymentConfirmedByBuyer=${chatData?.paymentConfirmedByBuyer}, buyerConfirmedPayment=${chatData?.buyerConfirmedPayment}, sellerConfirmedReceipt=${chatData?.sellerConfirmedReceipt}`);
         throw new HttpsError("failed-precondition", "Chat is not in the correct state for payment receipt confirmation.");
       }
 
@@ -835,6 +845,9 @@ export const confirmPaymentReceived = onCall(
         closedAt: now,
         closedBy: "seller",
         escrowActive: false,
+        sellerConfirmedReceipt: true,
+        paymentReceiptConfirmedAt: now,
+        paymentStatus: "completed",
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
       });
 

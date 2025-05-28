@@ -1866,7 +1866,8 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
             await updateDoc(chatDocRef, {
               status: "completed",
               completedAt: Date.now(),
-              sellerConfirmedReceipt: true
+              sellerConfirmedReceipt: true,
+              paymentStatus: "completed"
             });
           }
         } catch (updateError) {
@@ -2316,7 +2317,7 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
   );
   
   // შევცვალოთ პირობა: გამოჩნდეს მხოლოდ ადმინისთვის, აღარ გამოჩნდეს გამყიდველისთვის (isRealSellerForPayment)
-  if ((user?.isAdmin) && (chatData?.status === "awaiting_seller_confirmation" || 
+console.log("ChatInterface component rendered");  if ((isRealSellerForPayment || user?.isAdmin) && (chatData?.status === "awaiting_seller_confirmation" || 
       (chatData?.buyerConfirmedPayment && !chatData?.sellerConfirmedReceipt))) {
     return (
       <div className="flex justify-start my-4">
