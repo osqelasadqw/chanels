@@ -49,8 +49,8 @@ service cloud.firestore {
     
     // მომხმარებლების წესები
     match /users/{userId} {
-      // მომხმარებელს შეუძლია წაიკითხოს ნებისმიერი მომხმარებლის მონაცემები
-      allow read: if isAuthenticated();
+      // ნებისმიერ ვიზიტორს შეუძლია წაიკითხოს მომხმარებლის საჯარო მონაცემები
+      allow read: if true;
       
       // მომხმარებელს შეუძლია შექმნას საკუთარი მომხმარებლის დოკუმენტი
       allow create: if isOwner(userId);
@@ -65,8 +65,8 @@ service cloud.firestore {
     
     // პროდუქტების წესები
     match /products/{productId} {
-      // ნებისმიერ მომხმარებელს შეუძლია წაიკითხოს პროდუქტები
-      allow read: if isAuthenticated();
+      // ნებისმიერ მომხმარებელს შეუძლია წაიკითხოს პროდუქტები (ავთენტიფიკაციის გარეშეც)
+      allow read: if true;
       
       // მომხმარებელს შეუძლია შექმნას პროდუქტი
       allow create: if isAuthenticated();

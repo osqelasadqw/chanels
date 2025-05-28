@@ -2245,7 +2245,7 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
     
     // მყიდველისთვის "paid" ღილაკი - გადავამოწმოთ გაუმჯობესებული პირობებით
     // მყიდველისთვის "paid" ღილაკი - დავამატოთ მრავალი პირობა რომლითაც შეიძლება ეს ღილაკი გამოჩნდეს
-    if ((isUserBuyer || user?.isAdmin) && (
+    if (isUserBuyer && (
       primaryOwnerConfirmed || 
       chatData?.primaryOwnerConfirmed || 
       chatData?.status === "awaiting_buyer_payment" ||
