@@ -638,7 +638,7 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 mr-2">
               <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75" />
             </svg>
-            მთავარი
+            Home
           </Link>
           
           <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-white text-2xl font-bold">
@@ -878,7 +878,7 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
 
                 <div className="lg:w-1/4 flex flex-col items-end justify-end mr-4">
                   <div 
-                    className="p-3 border border-gray-200 rounded-2xl rounded-b-none shadow-sm max-w-sm w-full cursor-pointer"
+                    className="p-3 border border-gray-200 rounded-2xl rounded-br-none shadow-sm max-w-sm w-full cursor-pointer"
                     onClick={() => product?.userId && router.push(`/profile/${product.userId}`)}
                   >
                     <div className="flex flex-col">
@@ -933,12 +933,12 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
                   </div>
                   
                   <div className="flex w-full">
-                                          <button 
+                      <button 
                       onClick={handleContactSeller}
                       disabled={contactLoading || !product || !youtubeDataLoaded}
-                      className="w-full py-1.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-b-xl text-sm transition-colors border-t-0"
+                      className="w-1/2 ml-auto py-1.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-b-xl text-sm transition-colors"
                     >
-                      დაკავშირება
+                      Contact
                     </button>
                   </div>
                 </div>
