@@ -12,13 +12,18 @@ import { Chat } from "@/types/chat";
 import { ref, push } from "firebase/database";
 import { rtdb } from "@/firebase/config";
 
+// ჩატების ტიპის გაფართოება
+interface EnhancedChat extends Chat {
+  hiddenBy?: string[];
+}
+
 // ჩატების გვერდის შიგთავსის კომპონენტი
 function MyChatsContent() {
   const { user, loading } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const chatIdFromUrl = searchParams.get('chatId');
-  const paymentStatus = searchParams.get('payment');
+  const chatIdFromUrl = searchParams?.get('chatId') || null;
+  const paymentStatus = searchParams?.get('payment') || null;
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [productId, setProductId] = useState<string>("");
 
@@ -264,7 +269,7 @@ export default function MyChatsPage() {
 
 // Enhanced Chat List Component
 function EnhancedChatList({ onChatSelect, selectedChatId }: { onChatSelect: (chatId: string, productId: string) => void, selectedChatId: string | null }) {
-  const [chats, setChats] = useState<Chat[]>([]);
+  const [chats, setChats] = useState<EnhancedChat[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { user } = useAuth();
@@ -289,12 +294,13 @@ function EnhancedChatList({ onChatSelect, selectedChatId }: { onChatSelect: (cha
         const chatList = snapshot.docs.map((doc) => ({
           id: doc.id,
           ...doc.data()
-        } as Chat));
+        } as EnhancedChat));
         
         // Filter hidden chats
         const filteredChats = chatList.filter(chat => {
-          const hiddenArray = chat.hiddenBy || [];
-          return !hiddenArray.includes(user.id);
+          // უსაფრთხოდ შევამოწმოთ hiddenBy თვისება
+          const hiddenArray = (chat as EnhancedChat).hiddenBy || [];
+          return !hiddenArray.includes(user?.id || '');
         });
         
         // Sort by createdAt in descending order

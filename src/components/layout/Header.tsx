@@ -12,33 +12,39 @@ export default function Header() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   return (
-    <header className="bg-white shadow">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <header className="shadow relative">
+      {/* ფონური გამოსახულება */}
+      <div className="absolute inset-0 z-0">
+        <Image
+          src="/background.jpeg"
+          alt="Background"
+          fill
+          className="object-cover"
+          priority
+        />
+      </div>
+      
+      {/* გამჭვირვალე ფენა ტექსტის გასარჩევად */}
+      <div className="absolute inset-0 bg-black bg-opacity-40 z-0"></div>
+      
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
         <div className="flex justify-between h-16">
           <div className="flex">
             <Link href="/" className="flex-shrink-0 flex items-center">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-8 w-8 text-blue-600">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-8 w-8 text-white">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
               </svg>
-              <span className="ml-2 font-bold text-lg">Channel Market</span>
+              <span className="ml-2 font-bold text-lg text-white">Channel Market</span>
             </Link>
             
             <nav className="hidden sm:ml-6 sm:flex sm:space-x-4 sm:items-center">
-              <Link href="/products" className="px-3 py-2 rounded-md text-sm font-medium text-gray-700 hover:text-gray-900 hover:bg-gray-50">
+              <Link href="/products" className="px-3 py-2 rounded-md text-sm font-medium text-white hover:text-gray-100 hover:bg-black hover:bg-opacity-20">
                 Browse
               </Link>
               
-              <Link href="/how-it-works" className="px-3 py-2 rounded-md text-sm font-medium text-gray-700 hover:text-gray-900 hover:bg-gray-50">
+              <Link href="/how-it-works" className="px-3 py-2 rounded-md text-sm font-medium text-white hover:text-gray-100 hover:bg-black hover:bg-opacity-20">
                 How It Works
               </Link>
-              
-              {user && (
-                <>
-                  <Link href="/my-chats" className="px-3 py-2 rounded-md text-sm font-medium text-gray-700 hover:text-gray-900 hover:bg-gray-50">
-                    My Chats
-                  </Link>
-                </>
-              )}
             </nav>
           </div>
 
@@ -62,7 +68,7 @@ export default function Header() {
             <button
               type="button"
               onClick={() => setIsMenuOpen(!isMenuOpen)}
-              className="inline-flex items-center justify-center p-2 rounded-md text-gray-400 hover:text-gray-500 hover:bg-gray-100 focus:outline-none"
+              className="inline-flex items-center justify-center p-2 rounded-md text-white hover:text-gray-200 hover:bg-black hover:bg-opacity-20 focus:outline-none"
               aria-expanded="false"
             >
               <span className="sr-only">Open main menu</span>
@@ -82,33 +88,27 @@ export default function Header() {
 
       {/* Mobile menu */}
       {isMenuOpen && (
-        <div className="sm:hidden">
+        <div className="sm:hidden relative z-10 bg-black bg-opacity-70">
           <div className="pt-2 pb-3 space-y-1">
-            <Link href="/products" className="block px-3 py-2 rounded-md text-base font-medium text-gray-700 hover:text-gray-900 hover:bg-gray-50">
+            <Link href="/products" className="block px-3 py-2 rounded-md text-base font-medium text-white hover:text-gray-200 hover:bg-black hover:bg-opacity-20">
               Browse
             </Link>
             
-            <Link href="/how-it-works" className="block px-3 py-2 rounded-md text-base font-medium text-gray-700 hover:text-gray-900 hover:bg-gray-50">
+            <Link href="/how-it-works" className="block px-3 py-2 rounded-md text-base font-medium text-white hover:text-gray-200 hover:bg-black hover:bg-opacity-20">
               How It Works
             </Link>
             
             {user && (
-              <>
-                <Link href="/my-chats" className="block px-3 py-2 rounded-md text-base font-medium text-gray-700 hover:text-gray-900 hover:bg-gray-50">
-                  My Chats
-                </Link>
-                
-                <Link 
-                  href="/products/new" 
-                  className="block px-3 py-2 rounded-md text-base font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50"
-                >
-                  List Channel
-                </Link>
-              </>
+              <Link 
+                href="/products/new" 
+                className="block px-3 py-2 rounded-md text-base font-medium text-blue-300 hover:text-blue-200 hover:bg-black hover:bg-opacity-20"
+              >
+                List Channel
+              </Link>
             )}
           </div>
           
-          <div className="pt-4 pb-3 border-t border-gray-200">
+          <div className="pt-4 pb-3 border-t border-gray-600">
             {user ? (
               <div className="px-3">
                 <div className="flex items-center">
@@ -129,8 +129,8 @@ export default function Header() {
                   </div>
                   
                   <div className="ml-3">
-                    <div className="text-base font-medium text-gray-800">{user.name}</div>
-                    <div className="text-sm font-medium text-gray-500">{user.email}</div>
+                    <div className="text-base font-medium text-white">{user.name}</div>
+                    <div className="text-sm font-medium text-gray-300">{user.email}</div>
                   </div>
                 </div>
                 
@@ -141,7 +141,7 @@ export default function Header() {
                       e.preventDefault();
                       signOut();
                     }}
-                    className="block px-3 py-2 rounded-md text-base font-medium text-red-600 hover:text-red-800 hover:bg-red-50"
+                    className="block px-3 py-2 rounded-md text-base font-medium text-red-400 hover:text-red-300 hover:bg-black hover:bg-opacity-20"
                   >
                     Sign Out
                   </a>

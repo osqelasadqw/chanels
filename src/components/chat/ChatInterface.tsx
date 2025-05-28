@@ -118,6 +118,7 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
   const [showReviewModal, setShowReviewModal] = useState<boolean>(false);
   const [buyerConfirmedPayment, setBuyerConfirmedPayment] = useState<boolean>(false);
   const [sellerConfirmedReceipt, setSellerConfirmedReceipt] = useState<boolean>(false);
+  const [loadingMessages, setLoadingMessages] = useState<boolean>(true);
   
   // ფუნქცია ტაიმერის განახლებისთვის - მდებარეობს კომპონენტის დასაწყისში, ჰუკების შემდეგ
   const updateRemainingTime = () => {
@@ -2115,11 +2116,24 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
 
   // დავამატოთ შეფასების ღილაკი ჩატში
   const ReviewMessage = () => {
-    if (!user || hasLeftReview || !chatData) return null;
+    if (!user || !chatData) return null;
 
-    // შევამოწმოთ არის თუ არა ტრანზაქცია დასრულებული 
-    // მხოლოდ completed სტატუსის შემთხვევაში ვაჩვენოთ შეფასების ღილაკი
-    if (chatData.status !== "completed") return null;
+    // დავამატოთ ლოგიკა, რომელიც ამოწმებს არის თუ არა ტრანზაქცია დასრულებული
+    // როგორც completed სტატუსის, ასევე მესიჯების მიხედვით
+    const isTransactionCompleted = 
+      chatData.status === "completed" || 
+      sellerConfirmedReceipt || 
+      messages.some(msg => 
+        msg.isSystem && 
+        (msg.text.includes("Seller has confirmed payment receipt") || 
+         msg.text.includes("Transaction completed successfully"))
+      );
+
+    // თუ ტრანზაქცია არ არის დასრულებული, არ ვაჩვენოთ შეფასების ღილაკი
+    if (!isTransactionCompleted) return null;
+
+    // თუ მომხმარებელს უკვე დატოვებული აქვს შეფასება, არ ვაჩვენოთ ეს კომპონენტი
+    if (hasLeftReview) return null;
 
     // ვინახავთ მომხმარებლის როლს ლოკალურად
     const isSellerForReview = user.id === chatData.sellerId;
@@ -2385,6 +2399,67 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
       checkExistingReview();
     }
   }, [chatData, user, chatId]);
+
+  useEffect(() => {
+    if (!chatId || !user) return;
+
+    // ვამატებთ ცვლადს, რომ განვსაზღვროთ არის თუ არა ეფექტი ჯერ კიდევ აქტიური
+    let isEffectActive = true;
+
+    const rtdbMessagesRef = ref(rtdb, `messages/${chatId}`);
+    onValue(rtdbMessagesRef, (snapshot) => {
+      if (!isEffectActive) return;
+
+      if (snapshot.exists()) {
+        const messagesData = snapshot.val();
+        const messagesList = Object.keys(messagesData).map((key) => ({
+          id: key,
+          ...messagesData[key]
+        }));
+        
+        // Sort messages by timestamp
+        messagesList.sort((a, b) => a.timestamp - b.timestamp);
+        setMessages(messagesList);
+        
+        // შევამოწმოთ არის თუ არა ტრანზაქცია დასრულებული მესიჯების მიხედვით
+        const hasCompletionMessage = messagesList.some(msg => 
+          msg.isSystem && 
+          (msg.text.includes("Seller has confirmed payment receipt") || 
+           msg.text.includes("Transaction completed successfully"))
+        );
+        
+        // თუ ნაპოვნია ტრანზაქციის დასრულების მესიჯი, შევამოწმოთ review დატოვებული აქვს თუ არა მომხმარებელს
+        if (hasCompletionMessage && user && !hasLeftReview) {
+          // შევამოწმოთ reviews კოლექციაში
+          const checkReviewStatus = async () => {
+            try {
+              const reviewsQuery = query(
+                collection(db, "reviews"), 
+                where("chatId", "==", chatId),
+                where("reviewerId", "==", user.id)
+              );
+              
+              const reviewsSnapshot = await getDocs(reviewsQuery);
+              if (!isEffectActive) return;
+              
+              setHasLeftReview(!reviewsSnapshot.empty);
+            } catch (error) {
+              console.error("Error checking review status:", error);
+            }
+          };
+          
+          checkReviewStatus();
+        }
+      } else {
+        setMessages([]);
+      }
+    });
+
+    return () => {
+      off(rtdbMessagesRef);
+      isEffectActive = false;
+    };
+  }, [chatId, user, hasLeftReview]);
 
   return (
     <div className="flex flex-col w-full h-full overflow-hidden">

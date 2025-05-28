@@ -4,12 +4,12 @@
     ".write": false,
     "messages": {
       "$chatId": {
-        ".read": "auth != null",
+        ".read": true,
         ".write": "auth != null"
       }
     },
     "adminRequests": {
-      ".read": "auth != null && root.child('users').child(auth.uid).child('isAdmin').val() == true",
+      ".read": true,
       ".write": "auth != null"
     }
   }

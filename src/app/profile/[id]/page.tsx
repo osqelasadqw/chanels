@@ -6,6 +6,10 @@ import { db } from '@/firebase/config';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
+// ახალი იმპორტები
+import Footer from '@/components/layout/Footer';
+import UserMenu from '@/components/auth/UserMenu';
+import { useAuth } from '@/components/auth/AuthProvider';
 
 interface Review {
   id: string;
@@ -291,9 +295,10 @@ export default function PublicProfilePage() {
       <div className="min-h-screen w-full">
         <div className="w-full">
           <div className="flex justify-center items-center h-64">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500"></div>
+            <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-gray-900"></div>
           </div>
         </div>
+        <Footer />
       </div>
     );
   }
@@ -312,13 +317,42 @@ export default function PublicProfilePage() {
             </div>
           </div>
         </div>
+        <Footer />
       </div>
     );
   }
 
   return (
     <div className="min-h-screen w-full">
-      <div className="w-full">
+      {/* ახალი ჰედერი */}
+      <header className="relative shadow-md">
+        {/* ფონური სურათის ნაცვლად გრადიენტული ფერი */}
+        <div className="absolute inset-0 z-0 bg-gradient-to-r from-blue-400 to-blue-600"></div>
+        
+        <div className="relative z-10 max-w-7xl mx-auto px-4 py-4">
+          <div className="flex items-center justify-between">
+            {/* მარცხენა მხარე - სახლის ღილაკი */}
+            <Link href="/" className="flex items-center text-white hover:text-gray-200 transition-colors">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
+              </svg>
+              <span className="ml-2 font-medium">მთავარი</span>
+            </Link>
+            
+            {/* შუა ნაწილი - სათაური */}
+            <div className="text-center">
+              <h1 className="text-xl md:text-2xl font-bold text-white">Channel Market</h1>
+            </div>
+            
+            {/* მარჯვენა მხარე - იმპორტირებული UserMenu კომპონენტი */}
+            <div className="relative">
+              <UserMenu />
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div className="w-full pb-16">
         {user && (
           <div className="w-full overflow-hidden">
             {/* პროფილის ზედა ნაწილი */}
@@ -517,9 +551,8 @@ export default function PublicProfilePage() {
             </div>
           </div>
         )}
-        
-
       </div>
+      <Footer />
     </div>
   );
 } 

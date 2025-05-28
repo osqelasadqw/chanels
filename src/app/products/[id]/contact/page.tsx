@@ -251,7 +251,7 @@ Payment Method: Visa/MasterCard`,
 
   return (
     <div className="bg-white rounded-lg shadow-md p-6">
-      <h1 className="text-2xl font-bold mb-6">Purchase Channel</h1>
+      <h1 className="text-2xl font-bold mb-6">Contact</h1>
       
       <div className="mb-6 p-4 bg-gray-50 rounded-lg">
         <div className="flex items-center justify-between mb-4">

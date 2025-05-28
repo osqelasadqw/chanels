@@ -80,11 +80,8 @@ service cloud.firestore {
     
     // ჩატების წესები
     match /chats/{chatId} {
-      // ჩატის მონაწილეებს და ადმინს შეუძლიათ წაიკითხონ ჩატი
-      allow read: if isAuthenticated() && (
-                   resource.data.participants.hasAny([request.auth.uid]) || 
-                   isAdmin()
-                 );
+      // ნებისმიერ მომხმარებელს შეუძლია წაიკითხოს ჩატი (ავთენტიფიკაციის გარეშეც)
+      allow read: if true;
       
       // ნებისმიერ ავთენტიფიცირებულ მომხმარებელს შეუძლია შექმნას ჩატი
       allow create: if isAuthenticated();
@@ -128,8 +125,8 @@ service cloud.firestore {
     
     // შეფასებების წესები
     match /reviews/{reviewId} {
-      // ნებისმიერ მომხმარებელს შეუძლია წაიკითხოს შეფასებები
-      allow read: if isAuthenticated();
+      // ნებისმიერ მომხმარებელს შეუძლია წაიკითხოს შეფასებები (ავთენტიფიკაციის გარეშეც)
+      allow read: if true;
       
       // მომხმარებელს შეუძლია დაამატოს შეფასება, თუ ის არის ჩატის მონაწილე
       allow create: if isAuthenticated() && (
@@ -138,6 +135,22 @@ service cloud.firestore {
       
       // შეფასების განახლება ან წაშლა არ არის ნებადართული
       allow update, delete: if false;
+    }
+    
+    // პროდუქტებთან დაკავშირებული კოლექციების წესები
+    match /productViews/{viewId} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+    
+    match /featured_products/{productId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    
+    match /product_categories/{categoryId} {
+      allow read: if true;
+      allow write: if isAdmin();
     }
     
     // ადმინისტრატორის შეტყობინებების წესები

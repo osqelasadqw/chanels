@@ -59,14 +59,15 @@ export default function UserMenu() {
           <Link href="/my-chats" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
             My Chats
           </Link>
+          
+          <Link href="/transactions" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+            Transactions
+          </Link>
 
           {user.isAdmin && (
             <>
               <Link href="/admin" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
                 Admin Panel
-              </Link>
-              <Link href="/admin/manage-admins" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
-                Manage Admins
               </Link>
             </>
           )}

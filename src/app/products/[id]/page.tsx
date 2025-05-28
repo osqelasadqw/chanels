@@ -51,7 +51,8 @@ export default function ProductPage({ params }: ProductPageProps) {
   const [loading, setLoading] = useState(true);
   const [youtubeDataLoaded, setYoutubeDataLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [contactLoading, setContactLoading] = useState(false);
+  const [topContactLoading, setTopContactLoading] = useState(false);
+  const [bottomContactLoading, setBottomContactLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [isFavorite, setIsFavorite] = useState(false);
   const [favoriteLoading, setFavoriteLoading] = useState(false);
@@ -264,7 +265,7 @@ export default function ProductPage({ params }: ProductPageProps) {
     }
   };
 
-  const handleContactSeller = async () => {
+  const handleContactSeller = async (buttonPosition: 'top' | 'bottom' = 'top') => {
     if (!user) {
       router.push('/login');
       return;
@@ -278,7 +279,11 @@ export default function ProductPage({ params }: ProductPageProps) {
     }
 
     try {
-      setContactLoading(true);
+      if (buttonPosition === 'top') {
+        setTopContactLoading(true);
+      } else {
+        setBottomContactLoading(true);
+      }
       console.log("Starting contact seller process...");
       console.log("Current user ID:", user.id);
       console.log("Seller ID:", product.userId);
@@ -568,7 +573,11 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
     } catch (err) {
       console.error("Error in contact seller function:", err);
     } finally {
-      setContactLoading(false);
+      if (buttonPosition === 'top') {
+        setTopContactLoading(false);
+      } else {
+        setBottomContactLoading(false);
+      }
     }
   };
   
@@ -670,30 +679,14 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
                   </div>
                 )}
                 <div className="p-2">
-                  {/* <Link href="/" className="block px-4 py-2 text-gray-700 hover:bg-gray-100 rounded">
+                  <Link href="/transactions" className="block px-4 py-2 text-gray-700 hover:bg-gray-100 rounded">
                     <div className="flex items-center">
-                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 mr-3 text-indigo-500">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h7.5" />
+                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 mr-3 text-green-500">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 18.75a60.07 60.07 0 0115.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 013 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 00-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 01-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 003 15h-.75M15 10.5a3 3 0 11-6 0 3 3 0 016 0zm3 0h.008v.008H18V10.5zm-12 0h.008v.008H6V10.5z" />
                       </svg>
-                      Home
+                      My Transactions
                     </div>
-                  </Link> */}
-                  {/* <Link href="/products" className="block px-4 py-2 text-gray-700 hover:bg-gray-100 rounded">
-                    <div className="flex items-center">
-                       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 mr-3 text-indigo-500">
-                         <path strokeLinecap="round" strokeLinejoin="round" d="M6 6h12M6 12h12M6 18h12" />
-                       </svg>
-                      Products
-                    </div>
-                  </Link> */}
-                  {/* <Link href="/my-chats" className="block px-4 py-2 text-gray-700 hover:bg-gray-100 rounded">
-                    <div className="flex items-center">
-                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 mr-3 text-indigo-500">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z" />
-                      </svg>
-                      My Chats
-                    </div>
-                  </Link> */}
+                  </Link>
                   {user && (
                     <>
                       <Link href="/profile" className="block px-4 py-2 text-gray-700 hover:bg-gray-100 rounded">
@@ -702,14 +695,6 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
                             <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
                           </svg>
                           My profile
-                        </div>
-                      </Link>
-                      <Link href={`/profile/${user.id}`} className="block px-4 py-2 text-gray-700 hover:bg-gray-100 rounded">
-                        <div className="flex items-center">
-                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 mr-3 text-purple-500">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
-                          </svg>
-                          საჯარო პროფილი
                         </div>
                       </Link>
                       <Link href="/my-favorites" className="block px-4 py-2 text-gray-700 hover:bg-gray-100 rounded">
@@ -818,11 +803,11 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
                   
                   <div className="flex gap-2 mt-3">
                     <button 
-                      onClick={handleContactSeller}
-                      disabled={contactLoading || !product || !youtubeDataLoaded}
+                      onClick={() => handleContactSeller('top')}
+                      disabled={topContactLoading || !product || !youtubeDataLoaded}
                       className={`flex-1 py-1.5 px-2 ${youtubeDataLoaded ? 'bg-black hover:bg-gray-800' : 'bg-gray-400 cursor-not-allowed'} text-white font-medium rounded-full text-sm transition-colors`}
                     >
-                      {contactLoading ? 'Processing...' : !youtubeDataLoaded ? 'Loading data...' : 'Purchase Channel'}
+                      {topContactLoading ? 'Processing...' : !youtubeDataLoaded ? 'Loading data...' : 'Purchase Channel'}
                     </button>
                     <button 
                       onClick={handleToggleFavorite}
@@ -933,12 +918,12 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
                   </div>
                   
                   <div className="flex w-full">
-                      <button 
-                      onClick={handleContactSeller}
-                      disabled={contactLoading || !product || !youtubeDataLoaded}
+                    <button 
+                      onClick={() => handleContactSeller('bottom')}
+                      disabled={bottomContactLoading || !product || !youtubeDataLoaded}
                       className="w-1/2 ml-auto py-1.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-b-xl text-sm transition-colors"
                     >
-                      Contact
+                      {bottomContactLoading ? 'Processing...' : 'Contact'}
                     </button>
                   </div>
                 </div>
