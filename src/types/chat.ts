@@ -6,60 +6,85 @@ export interface Message {
   senderPhotoURL?: string;
   timestamp: number;
   isAdmin?: boolean;
-  isRequest?: boolean;
   isSystem?: boolean;
   isEscrowRequest?: boolean;
+  isRequest?: boolean;
   isPaymentConfirmation?: boolean;
   transactionData?: {
-    productId: string;
     productName: string;
     price: number;
-    useEscrow: boolean;
     paymentMethod: string;
-    transactionId: number;
+    transactionId: string;
+    useEscrow: boolean;
   };
 }
 
 export interface Chat {
   id: string;
-  productId: string;
-  productName?: string;
   participants: string[];
-  participantNames: Record<string, string>;
-  participantPhotos: Record<string, string>;
-  lastMessage?: Message;
+  participantNames?: Record<string, string>;
+  participantPhotos?: Record<string, string | null>;
+  name?: string;
   createdAt: number;
-  adminJoined?: boolean;
-  hiddenBy?: string[];
-  isPrivateWithAdmin?: boolean;
-  isPrivateWithUser?: boolean;
-  isEscrowChat?: boolean;
-  isPrivateEscrowChat?: boolean;
-  originalChatId?: string;
+  updatedAt: number;
+  lastMessage?: {
+    text: string;
+    timestamp: number;
+    senderId: string;
+  };
+  sellerId?: string;
+  buyerId?: string;
+  productId?: string;
+  productName?: string;
+  paymentSessionId?: string;
+  paymentStatus?: string;
   paymentCompleted?: boolean;
   paymentCompletedAt?: number;
-  paymentStatus?: string;
-  paymentId?: string;
-  paymentSessionId?: string;
   feeAmount?: number;
+  totalAmount?: number;
+  productPrice?: number;
   sellerConfirmed?: boolean;
   sellerConfirmedAt?: number;
-  transferTimerStarted?: boolean;
-  transferTimerStartedAt?: number;
-  transferReadyTime?: number;
-  transferStatus?: 'pending' | 'completed' | 'cancelled';
-  sellerId?: string;
+  adminJoined?: boolean;
+  adminJoinedAt?: number;
   adminId?: string;
   adminPhotoURL?: string;
+  isPrivateWithAdmin?: boolean;
+  originalChatId?: string;
   hasPrivateAdminChat?: boolean;
   privateAdminChatId?: string;
   privateAdminChatCreatedAt?: number;
-  totalAmount?: number;
-  productPrice?: number;
-  timerActive?: boolean;
-  timerStartDate?: number;
-  timerEndDate?: number;
+  escrowAgentAdminId?: string;
+  escrowAgentAdminEmail?: string;
+  escrowAgentAssignedAt?: number;
   managerRightsAssigned?: boolean;
+  
+  // ტაიმერის ველები
+  transferTimerStarted?: boolean;
+  transferTimerStartedAt?: number;
+  transferReadyTime?: number;
+  transferStatus?: string;
+  timerActive?: boolean;
+  timerEndDate?: number;
+  
+  // ახალი ველები პირველადი მფლობელობის გადაცემისთვის
+  status?: string;
+  transferReady?: boolean;
+  primaryTransferInitiated?: boolean;
+  primaryTransferInitiatedAt?: number;
+  primaryOwnerConfirmed?: boolean;
+  primaryOwnerConfirmedAt?: number;
+  paymentConfirmedByBuyer?: boolean;
+  paymentConfirmedByBuyerAt?: number;
+  closedAt?: number;
+  closedBy?: string;
+  escrowActive?: boolean;
+  owners?: string[];
+  
+  // დამატებული ახალი ველები ლინტერის შეცდომების გამოსასწორებლად
+  buyerConfirmedPayment?: boolean;
+  sellerConfirmedReceipt?: boolean;
+  completedAt?: number;
 }
 
 export interface ChatState {

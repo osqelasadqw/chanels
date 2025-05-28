@@ -13,6 +13,30 @@ import { rtdb } from "@/firebase/config";
 import { getChannelLogo, extractChannelIdFromUrl } from "@/firebase/channelLogos";
 import { getAuth, signOut } from "firebase/auth";
 
+interface Review {
+  id: string;
+  reviewerId: string;
+  reviewerName: string;
+  productId: string;
+  productName?: string;
+  rating: number;
+  comment: string;
+  timestamp: Date;
+  reviewerPhotoURL?: string;
+  youtube?: string;
+  channelName?: string;
+  price?: string | number;
+  sellerId?: string;
+  sellerName?: string;
+  sentiment?: 'positive' | 'negative';
+  paymentAmount?: string | number;
+  buyerId?: string;
+  buyerName?: string;
+  reviewerRole?: 'buyer' | 'seller';
+  transactionComplete?: boolean;
+  transactionDate?: number;
+}
+
 interface ProductPageProps {
   params: {
     id: string;
@@ -21,7 +45,7 @@ interface ProductPageProps {
 
 export default function ProductPage({ params }: ProductPageProps) {
   const pathname = usePathname();
-  const productId = pathname.split('/').pop() || '';
+  const productId = pathname ? pathname.split('/').pop() || '' : '';
   
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
@@ -33,6 +57,8 @@ export default function ProductPage({ params }: ProductPageProps) {
   const [favoriteLoading, setFavoriteLoading] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [sellerInfo, setSellerInfo] = useState<any>(null);
+  const [sellerReviews, setSellerReviews] = useState<Review[]>([]);
   const { user } = useAuth();
   const router = useRouter();
 
@@ -52,6 +78,66 @@ export default function ProductPage({ params }: ProductPageProps) {
             id: productDoc.id,
             ...productData
           } as Product;
+          
+          // დამატებით, მოვიძიოთ გამყიდველის ინფორმაცია
+          if (productData.userId) {
+            try {
+              const sellerDocRef = doc(db, "users", productData.userId);
+              const sellerDoc = await getDoc(sellerDocRef);
+              if (sellerDoc.exists()) {
+                const sellerData = sellerDoc.data();
+                setSellerInfo({
+                  photoURL: sellerData.photoURL || '/images/default-avatar.png',
+                  displayName: sellerData.name || sellerData.displayName || 'Seller',
+                  rating: sellerData.rating || 0,
+                  positiveRatings: sellerData.positiveRatings || 0,
+                  negativeRatings: sellerData.negativeRatings || 0
+                });
+                
+                // გამყიდველის შეფასებების წამოღება
+                const sellerReviewsQuery = query(
+                  collection(db, 'reviews'),
+                  where('sellerId', '==', productData.userId)
+                );
+                const reviewsSnapshot = await getDocs(sellerReviewsQuery);
+                const reviewsData = reviewsSnapshot.docs.map(doc => {
+                  const data = doc.data();
+                  
+                  return {
+                    id: doc.id,
+                    ...data,
+                    timestamp: data.timestamp?.toDate() || new Date()
+                  };
+                }) as Review[];
+                
+                // დავლოგოთ შეფასებების მონაცემები დებაგისთვის
+                console.log('Seller reviews from Firebase:', reviewsData);
+                
+                // პოზიტიური და ნეგატიური შეფასებების განსაზღვრა
+                const processedReviews = reviewsData.map(review => {
+                  // თუ sentiment უკვე განსაზღვრულია, დავტოვოთ როგორც არის
+                  if (review.sentiment) {
+                    return review;
+                  }
+                  
+                  // თუ არ არის განსაზღვრული, შევეცადოთ დავადგინოთ rating-ის მიხედვით ან სხვა მეთოდით
+                  if (review.rating && typeof review.rating === 'number') {
+                    // რეიტინგი 3-ზე მეტი ან ტოლი - პოზიტიური, ნაკლები - ნეგატიური
+                    review.sentiment = review.rating >= 3 ? 'positive' : 'negative';
+                  }
+                  
+                  return review;
+                });
+                
+                // დავალაგოთ შეფასებები თარიღის მიხედვით, უახლესი პირველი
+                processedReviews.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+                
+                setSellerReviews(processedReviews);
+              }
+            } catch (sellerErr) {
+              console.error("Error fetching seller info:", sellerErr);
+            }
+          }
           
           // თუ ეს YouTube არხია და არსებობს არხის ID, შევამოწმოთ channelLogos კოლექციაში
           if (productData.platform === "YouTube") {
@@ -501,7 +587,7 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
       setDeleteLoading(true);
       await deleteDoc(doc(db, "products", product.id));
       // alert("Listing deleted successfully");
-      router.push("/my-products");
+      router.push("/");
     } catch (err) {
       console.error("Error deleting listing:", err);
       // alert("Failed to delete listing. Please try again.");
@@ -517,7 +603,7 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-indigo-600"></div>
       </div>
     );
@@ -525,7 +611,7 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
+      <div className="min-h-screen flex flex-col items-center justify-center p-4">
         <div className="bg-red-50 text-red-700 p-6 rounded-lg shadow-md max-w-md">
           <h2 className="text-xl font-bold mb-4">{error}</h2>
           <p className="mb-4">We couldn't find the product you're looking for.</p>
@@ -542,7 +628,7 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 w-full">
+    <div className="min-h-screen w-full">
       <div 
         className="bg-cover bg-center h-20 relative w-full"
         style={{ backgroundImage: `url('/background.jpeg')` }}
@@ -610,12 +696,20 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
                   </Link> */}
                   {user && (
                     <>
-                      <Link href="/my-products" className="block px-4 py-2 text-gray-700 hover:bg-gray-100 rounded">
+                      <Link href="/profile" className="block px-4 py-2 text-gray-700 hover:bg-gray-100 rounded">
                         <div className="flex items-center">
-                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 mr-3 text-indigo-500">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 21v-7.5a.75.75 0 01.75-.75h3a.75.75 0 01.75.75V21m-4.5 0H2.36m11.14 0H18m0 0h3.64m-1.39 0V9.349m-16.5 11.65V9.35m0 0a3.001 3.001 0 003.75-.615A2.993 2.993 0 009.75 9.75c.896 0 1.7-.393 2.25-1.016a2.993 2.993 0 002.25 1.016c.896 0 1.7-.393 2.25-1.016a3.001 3.001 0 003.75.614m-16.5 0a3.004 3.004 0 01-.621-4.72L4.318 3.44A1.5 1.5 0 015.378 3h13.243a1.5 1.5 0 011.06.44l1.19 1.189a3 3 0 01-.621 4.72m-13.5 8.65h3.75a.75.75 0 00.75-.75V13.5a.75.75 0 00-.75-.75H6.75a.75.75 0 00-.75.75v3.75c0 .415.336.75.75.75z" />
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 mr-3 text-blue-500">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
                           </svg>
-                          My Channels
+                          My profile
+                        </div>
+                      </Link>
+                      <Link href={`/profile/${user.id}`} className="block px-4 py-2 text-gray-700 hover:bg-gray-100 rounded">
+                        <div className="flex items-center">
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 mr-3 text-purple-500">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
+                          </svg>
+                          საჯარო პროფილი
                         </div>
                       </Link>
                       <Link href="/my-favorites" className="block px-4 py-2 text-gray-700 hover:bg-gray-100 rounded">
@@ -668,7 +762,7 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
       </div>
 
       <div className="w-full px-0 py-0 pb-20">
-        <div className="w-full min-h-screen bg-gray-100 flex flex-col px-0">
+        <div className="w-full min-h-screen flex flex-col px-0">
           <div className="w-full px-0 py-4 flex-grow">
             <div className="flex justify-between items-center mb-3 text-xs text-gray-500 px-4">
               <div className="flex items-center space-x-2">
@@ -741,21 +835,12 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
                           : 'border-gray-300 text-gray-700 hover:bg-gray-50'
                       }`}
                     >
-                      {favoriteLoading ? 'Updating...' : !youtubeDataLoaded ? 'Loading...' : isFavorite ? 'Remove from Favorites' : 'Add to Favorites'}
+                      {favoriteLoading ? '...' : isFavorite ? 'Favorited' : 'Add to Favorites'}
                     </button>
                   </div>
-                  
-                  {!youtubeDataLoaded && (
-                    <div className="mt-3 text-center text-xs text-gray-500">
-                      <div className="flex items-center justify-center gap-2">
-                        <div className="animate-spin rounded-full h-3 w-3 border-t-2 border-b-2 border-blue-500"></div>
-                        Loading channel data from YouTube...
-                      </div>
-                    </div>
-                  )}
                 </div>
                 
-                <div className="lg:w-3/4">
+                <div className="lg:w-1/2">
                   <div className="flex flex-col xl:flex-row xl:justify-between">
                     <div className="mb-4 xl:mb-0">
                       <h1 className="text-3xl font-bold text-gray-900 mb-1">{product.displayName}</h1>
@@ -788,6 +873,73 @@ Payment Method: ${paymentMethod === 'stripe' ? 'Visa/MasterCard' : 'Bitcoin'}`,
                     {(product as any).discount && (
                       <div className="bg-gray-800 text-white px-2 py-0.5 rounded-full font-medium text-xs">-{(product as any).discount}%</div>
                     )}
+                  </div>
+                </div>
+
+                <div className="lg:w-1/4 flex flex-col items-end justify-end mr-4">
+                  <div 
+                    className="p-3 border border-gray-200 rounded-2xl rounded-b-none shadow-sm max-w-sm w-full cursor-pointer"
+                    onClick={() => product?.userId && router.push(`/profile/${product.userId}`)}
+                  >
+                    <div className="flex flex-col">
+                      <div className="flex items-center">
+                        <div className="w-10 h-10 rounded-full overflow-hidden mr-3 flex-shrink-0">
+                          <Image 
+                            src={sellerInfo?.photoURL || '/images/default-avatar.png'} 
+                            alt="Seller avatar"
+                            width={40}
+                            height={40}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                        <div className="w-full">
+                          <div 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              product?.userId && router.push(`/profile/${product.userId}`);
+                            }}
+                            className="font-medium text-md cursor-pointer hover:text-indigo-600"
+                          >
+                            {sellerInfo?.displayName || 'trader3'}
+                          </div>
+                                                      <div className="flex items-center justify-between text-xs">
+                            <span className="text-gray-600 flex items-center">
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+                              </svg>
+                              შეფასება
+                            </span>
+                            <div className="flex">
+                              <span className="text-green-600 font-medium mr-2 flex items-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                </svg>
+                                {sellerReviews.filter(review => review.sentiment === 'positive').length}
+                              </span>
+                              <span className="text-red-600 font-medium flex items-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                                {sellerReviews.filter(review => review.sentiment === 'negative').length}
+                              </span>
+                            </div>
+                          </div>
+
+                        </div>
+                      </div>
+                      
+
+                    </div>
+                  </div>
+                  
+                  <div className="flex w-full">
+                                          <button 
+                      onClick={handleContactSeller}
+                      disabled={contactLoading || !product || !youtubeDataLoaded}
+                      className="w-full py-1.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-b-xl text-sm transition-colors border-t-0"
+                    >
+                      დაკავშირება
+                    </button>
                   </div>
                 </div>
               </div>

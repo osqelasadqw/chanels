@@ -1,113 +1,152 @@
+/channelLogos/MHmhYtqf7zMyaTBAHgA49UJqDCc2/UCC93Yp3o7qpvLDkJHhN6b8g_1747945001307.com
+
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // ფუნქცია ამოწმებს, არის თუ არა მომხმარებელი ავტორიზებული
+    // ავთენტიფიცირებული მომხმარებლის ფუნქცია 
     function isAuthenticated() {
       return request.auth != null;
     }
     
-    // ფუნქცია ამოწმებს, არის თუ არა მომხმარებელი ადმინისტრატორი
+    // ადმინის ფუნქცია
     function isAdmin() {
-      return isAuthenticated() && 
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true || 
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.admin == true || 
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roles.admin == true);
+      return isAuthenticated() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
     }
     
-    // ფუნქცია ამოწმებს, არის თუ არა მიმდინარე მომხმარებელი დოკუმენტის მფლობელი
+    // ფუნქცია შესამოწმებლად, არის თუ არა მომხმარებელი დოკუმენტის მფლობელი
     function isOwner(userId) {
       return isAuthenticated() && request.auth.uid == userId;
     }
     
-    // ძირითადი წესები
-    match /products/{productId} {
-      // ნებისმიერს შეუძლია პროდუქტების წაკითხვა
-      allow read: if true;
-      
-      // მხოლოდ ავტორიზებულ მომხმარებელს შეუძლია პროდუქტის შექმნა
-      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      
-      // მხოლოდ მფლობელს შეუძლია პროდუქტის განახლება
-      allow update: if isOwner(resource.data.userId);
-      
-      // მხოლოდ მფლობელს ან ადმინისტრატორს შეუძლია პროდუქტის წაშლა
-      allow delete: if isOwner(resource.data.userId) || isAdmin();
+    // ფუნქცია შესამოწმებლად, არის თუ არა მომხმარებელი ჩატის გამყიდველი
+    function isChatSeller(chatData) {
+      return isAuthenticated() && request.auth.uid == chatData.sellerId;
     }
     
+    // ფუნქცია შესამოწმებლად, არის თუ არა მომხმარებელი ჩატის მყიდველი
+    function isChatBuyer(chatData) {
+      return isAuthenticated() && 
+             chatData.participants.hasAny([request.auth.uid]) && 
+             request.auth.uid != chatData.sellerId;
+    }
+    
+    // ფუნქცია შესამოწმებლად, არის თუ არა მომხმარებელი პროდუქტის მფლობელი
+    function isProductOwner(productData) {
+      return isAuthenticated() && 
+             request.auth.uid == productData.userId &&
+             request.auth.token.email == productData.userEmail;
+    }
+    
+    // ფუნქცია შესამოწმებლად, არის თუ არა მომხმარებელი ნამდვილი გამყიდველი (პროდუქტის მფლობელი და ჩატის გამყიდველი)
+    function isRealSeller(chatData, productData) {
+      return isAuthenticated() && (
+        // მომხმარებელი არის პროდუქტის მფლობელი
+        (request.auth.uid == productData.userId && request.auth.token.email == productData.userEmail) ||
+        // მომხმარებელი არის ჩატში დაფიქსირებული გამყიდველი და პროდუქტის მფლობელი
+        (request.auth.uid == chatData.sellerId && request.auth.uid == productData.userId)
+      );
+    }
+    
+    // მომხმარებლების წესები
     match /users/{userId} {
-      // მომხმარებელს შეუძლია საკუთარი პროფილის წაკითხვა და განახლება
-      allow read, write: if isOwner(userId);
+      // მომხმარებელს შეუძლია წაიკითხოს ნებისმიერი მომხმარებლის მონაცემები
+      allow read: if isAuthenticated();
       
-      // ადმინისტრატორს შეუძლია ნებისმიერი მომხმარებლის წაკითხვა
-      allow read: if isAdmin();
+      // მომხმარებელს შეუძლია შექმნას საკუთარი მომხმარებლის დოკუმენტი
+      allow create: if isOwner(userId);
       
-      // ადმინისტრატორის წესების განახლება მხოლოდ მაშინ, თუ ადმინისტრატორია
-      allow update: if isAdmin() && 
-        (request.resource.data.isAdmin == resource.data.isAdmin && 
-         request.resource.data.admin == resource.data.admin && 
-         request.resource.data.roles.admin == resource.data.roles.admin);
+      // მომხმარებელს შეუძლია განაახლოს მხოლოდ საკუთარი მომხმარებლის დოკუმენტი
+      // ან ადმინს შეუძლია განაახლოს ნებისმიერი მომხმარებლის დოკუმენტი
+      allow update: if isOwner(userId) || isAdmin();
       
-      // ფავორიტების კოლექცია
-      match /favorites/{favoriteId} {
-        allow read, write: if isOwner(userId);
-      }
-      
-      // ჩატების სია - ნებისმიერ ავტორიზებულ მომხმარებელს შეუძლია დაამატოს ჩატი
-      match /chatList/{chatId} {
-        allow read: if isOwner(userId);
-        allow create, update: if isAuthenticated();
-        allow delete: if isOwner(userId) || isAdmin();
-      }
+      // მხოლოდ ადმინს შეუძლია წაშალოს მომხმარებლის დოკუმენტი
+      allow delete: if isAdmin();
     }
     
+    // პროდუქტების წესები
+    match /products/{productId} {
+      // ნებისმიერ მომხმარებელს შეუძლია წაიკითხოს პროდუქტები
+      allow read: if isAuthenticated();
+      
+      // მომხმარებელს შეუძლია შექმნას პროდუქტი
+      allow create: if isAuthenticated();
+      
+      // მხოლოდ პროდუქტის მფლობელს ან ადმინს შეუძლია განაახლოს პროდუქტი
+      allow update: if isProductOwner(resource.data) || isAdmin();
+      
+      // მხოლოდ პროდუქტის მფლობელს ან ადმინს შეუძლია წაშალოს პროდუქტი
+      allow delete: if isProductOwner(resource.data) || isAdmin();
+    }
+    
+    // ჩატების წესები
     match /chats/{chatId} {
-      // ჩატი ხელმისაწვდომია მხოლოდ იმ მომხმარებლებისთვის, რომლებიც მონაწილეობენ ან ადმინისტრატორებისთვის
-      allow read: if isAuthenticated() && 
-        (resource.data.participants.hasAny([request.auth.uid]) || 
-         isAdmin());
+      // ჩატის მონაწილეებს და ადმინს შეუძლიათ წაიკითხონ ჩატი
+      allow read: if isAuthenticated() && (
+                   resource.data.participants.hasAny([request.auth.uid]) || 
+                   isAdmin()
+                 );
       
-      // ნებისმიერ ავტორიზებულ მომხმარებელს შეუძლია შექმნას ჩატი - გამარტივებული წესები
+      // ნებისმიერ ავთენტიფიცირებულ მომხმარებელს შეუძლია შექმნას ჩატი
       allow create: if isAuthenticated();
       
-      // ჩატის განახლება შეუძლია მონაწილეს ან ადმინისტრატორს
-      allow update: if isAuthenticated() && 
-        (resource.data.participants.hasAny([request.auth.uid]) || 
-         isAdmin());
-      
-      // ჩატის წაშლა შეუძლია მონაწილეს ან ადმინისტრატორს
-      allow delete: if isAuthenticated() &&
-        (resource.data.participants.hasAny([request.auth.uid]) ||
-         isAdmin());
-      
-      match /messages/{messageId} {
-        allow read: if isAuthenticated() && 
-          (get(/databases/$(database)/documents/chats/$(chatId)).data.participants.hasAny([request.auth.uid]) || 
-           isAdmin());
+      // ჩატის განახლება - მკაცრი წესები პრიმარი მფლობელობის ცვლილებებისთვის
+      allow update: if isAuthenticated() && (
+        // ადმინს აქვს სრული წვდომა
+        isAdmin() ||
         
-        allow create, update: if isAuthenticated();
-      }
+        // მყიდველისთვის ნებადართული ცვლილებები
+        (isChatBuyer(resource.data) && (
+          // მყიდველს შეუძლია მხოლოდ განსაზღვრული ველების განახლება
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['buyerConfirmedPayment', 'updatedAt', 'status']) &&
+          // მყიდველს შეუძლია გადახდის დადასტურება მხოლოდ სწორ სტატუსში
+          (resource.data.status == 'awaiting_buyer_payment' || 
+           resource.data.primaryOwnerConfirmed == true)
+        )) ||
+        
+        // გამყიდველისთვის ნებადართული ცვლილებები
+        (isChatSeller(resource.data) && (
+          // გამყიდველს შეუძლია პირველადი მფლობელობის ინიცირება
+          (request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['primaryTransferInitiated', 'primaryTransferInitiatedAt', 'updatedAt']) &&
+           resource.data.transferReady == true) ||
+          
+          // გამყიდველს შეუძლია გადახდის მიღების დადასტურება
+          (request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['sellerConfirmedReceipt', 'status', 'completedAt', 'updatedAt']) &&
+           resource.data.buyerConfirmedPayment == true)
+        )) ||
+        
+        // ნებადართული ველების განახლება ჩატის ნებისმიერი მონაწილისთვის
+        (resource.data.participants.hasAny([request.auth.uid]) && 
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastReadTimestamp', 'updatedAt']))
+      );
+      
+      // წაშლა არ არის ნებადართული, ჩატი შეიძლება მხოლოდ დაიხუროს
+      allow delete: if false;
     }
     
+    // შეფასებების წესები
+    match /reviews/{reviewId} {
+      // ნებისმიერ მომხმარებელს შეუძლია წაიკითხოს შეფასებები
+      allow read: if isAuthenticated();
+      
+      // მომხმარებელს შეუძლია დაამატოს შეფასება, თუ ის არის ჩატის მონაწილე
+      allow create: if isAuthenticated() && (
+        get(/databases/$(database)/documents/chats/$(request.resource.data.chatId)).data.participants.hasAny([request.auth.uid])
+      );
+      
+      // შეფასების განახლება ან წაშლა არ არის ნებადართული
+      allow update, delete: if false;
+    }
+    
+    // ადმინისტრატორის შეტყობინებების წესები
     match /admin_notifications/{notificationId} {
-      allow read: if isAdmin();
-      allow create: if isAuthenticated();
-      allow update, delete: if isAdmin();
+      // მხოლოდ ადმინს აქვს წვდომა ადმინისტრატორის შეტყობინებებზე
+      allow read, write: if isAdmin();
     }
     
-    match /wallet_addresses/{documentId} {
-      // ნებისმიერ ავტორიზებულ მომხმარებელს შეუძლია საფულის მისამართის დამატება
-      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      
-      // მომხმარებელს შეუძლია წაკითხვა საკუთარი მისამართების
-      allow read: if isAuthenticated() && 
-        (resource.data.userId == request.auth.uid || isAdmin());
-        
-      // განახლება და წაშლა მხოლოდ მფლობელს ან ადმინისტრატორს შეუძლია
-      allow update, delete: if isAuthenticated() && 
-        (resource.data.userId == request.auth.uid || isAdmin());
-    }
-    
-    // ყველა სხვა კოლექცია
+    // ნებისმიერი სხვა კოლექცია - მხოლოდ ადმინისტრატორებისთვის
     match /{document=**} {
       allow read, write: if isAdmin();
     }

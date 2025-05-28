@@ -11,9 +11,10 @@ interface ProductCardProps {
   product: Product;
   onContactSeller: (productId: string, paymentMethod: string, useEscrow: boolean) => void;
   className?: string;
+  hideLink?: boolean;
 }
 
-export default function ProductCard({ product, onContactSeller, className = "" }: ProductCardProps) {
+export default function ProductCard({ product, onContactSeller, className = "", hideLink = false }: ProductCardProps) {
   const { user } = useAuth();
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [showContactModal, setShowContactModal] = useState(false);
@@ -21,6 +22,7 @@ export default function ProductCard({ product, onContactSeller, className = "" }
   const [useEscrow, setUseEscrow] = useState<boolean>(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [logoUrl, setLogoUrl] = useState<string | null>(product.channelLogo || null);
   
   // Use effect to set mounted to true on component mount
   useEffect(() => {
@@ -40,6 +42,29 @@ export default function ProductCard({ product, onContactSeller, className = "" }
       }
     }
   }, [product.imageUrls]);
+
+  // თუ არხის ლოგო მისამართი პირდაპირ არის მითითებული storage-ის მისამართით
+  useEffect(() => {
+    const fetchLogoIfNeeded = async () => {
+      // თუ ლოგოს URL საჭიროებს გამოთხოვას სტორიჯიდან (და იწყება /channelLogos/ პრეფიქსით)
+      if (product.channelLogo && product.channelLogo.includes('/channelLogos/')) {
+        try {
+          const response = await fetch(`/api/channel-logo?path=${encodeURIComponent(product.channelLogo)}`);
+          
+          if (response.ok) {
+            const data = await response.json();
+            if (data.url) {
+              setLogoUrl(data.url);
+            }
+          }
+        } catch (error) {
+          console.error('Error fetching logo from storage:', error);
+        }
+      }
+    };
+
+    fetchLogoIfNeeded();
+  }, [product.channelLogo]);
 
   const nextImage = () => {
     if (!product.imageUrls || product.imageUrls.length <= 1) return;

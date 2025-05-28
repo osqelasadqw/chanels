@@ -37,10 +37,6 @@ export default function Header() {
                   <Link href="/my-chats" className="px-3 py-2 rounded-md text-sm font-medium text-gray-700 hover:text-gray-900 hover:bg-gray-50">
                     My Chats
                   </Link>
-                  
-                  <Link href="/my-products" className="px-3 py-2 rounded-md text-sm font-medium text-gray-700 hover:text-gray-900 hover:bg-gray-50">
-                    My Listings
-                  </Link>
                 </>
               )}
             </nav>
@@ -100,10 +96,6 @@ export default function Header() {
               <>
                 <Link href="/my-chats" className="block px-3 py-2 rounded-md text-base font-medium text-gray-700 hover:text-gray-900 hover:bg-gray-50">
                   My Chats
-                </Link>
-                
-                <Link href="/my-products" className="block px-3 py-2 rounded-md text-base font-medium text-gray-700 hover:text-gray-900 hover:bg-gray-50">
-                  My Listings
                 </Link>
                 
                 <Link 

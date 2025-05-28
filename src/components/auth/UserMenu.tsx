@@ -56,10 +56,6 @@ export default function UserMenu() {
             <p className="text-xs text-gray-500">{user.email}</p>
           </div>
           
-          <Link href="/my-products" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
-            My Products
-          </Link>
-          
           <Link href="/my-chats" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
             My Chats
           </Link>

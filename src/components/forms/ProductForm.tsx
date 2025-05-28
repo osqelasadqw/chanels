@@ -158,6 +158,8 @@ export default function ProductForm() {
         
         // Get channel logo/thumbnail from the API response
         let channelLogo = "";
+        let storagePath = "";
+        
         if (channel.snippet.thumbnails) {
           // Try to get the highest quality thumbnail available
           if (channel.snippet.thumbnails.high) {
@@ -175,6 +177,12 @@ export default function ProductForm() {
         if (channelLogo && user && channelId) {
           try {
             // ჯერ შევინახოთ ლოგო სტორიჯში
+            // ფაილის სახელის დაგენერირება
+            const fileExtension = 'jpg'; // ან 'png', დამოკიდებულია API-ის პასუხზე
+            const fileName = `${channelId}_${Date.now()}.${fileExtension}`;
+            storagePath = `channelLogos/${user.id}/${fileName}`;
+            
+            // გამოვიყენოთ downloadAndStoreChannelLogo ფუნქცია
             const storedLogoUrl = await downloadAndStoreChannelLogo(
               channelLogo,
               user.id,
@@ -189,10 +197,11 @@ export default function ProductForm() {
               'YouTube'
             );
             
-            // განვაახლოთ ლოგოს URL ჩვენს ლოკალურ მდგომარეობაში
-            channelLogo = storedLogoUrl;
+            // დავაყენოთ სტორიჯის მისამართი ფორმში
+            // მნიშვნელოვანია: ახლა ვინახავთ მისამართს და არა URL-ს
+            channelLogo = storagePath;
             
-            console.log("Saved channel logo to separate collection");
+            console.log("Saved channel logo to separate collection, path:", storagePath);
           } catch (err) {
             console.error("Error saving channel logo:", err);
             // თუ შეცდომაა, ვიყენებთ ორიგინალ URL-ს - არაფერი არ იცვლება
@@ -205,7 +214,7 @@ export default function ProductForm() {
           displayName: channel.snippet.title || "",
           // Process subscriber count as a number
           subscribers: parseInt(channel.statistics.subscriberCount) || 0,
-          channelLogo: channelLogo, // შევინახოთ არხის ლოგოს URL
+          channelLogo: channelLogo, // შევინახოთ არხის ლოგოს სტორიჯის მისამართი
           channelId: channelId // დავამატოთ არხის ID ფორმის მონაცემებში
         }));
         

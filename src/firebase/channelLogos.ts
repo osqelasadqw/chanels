@@ -162,4 +162,24 @@ export async function downloadAndStoreChannelLogo(
     // თუ შეცდომაა, დავაბრუნოთ ორიგინალი URL
     return logoUrl;
   }
+}
+
+/**
+ * გამოითხოვს ფაილს პირდაპირ Firebase Storage-დან კონკრეტული მისამართის გამოყენებით
+ * @param storagePath Firebase Storage-ში ფაილის სრული მისამართი
+ * @returns ფაილის იუარელი ან null
+ */
+export async function getStorageFileUrl(storagePath: string): Promise<string | null> {
+  try {
+    // შევქმნათ სტორიჯის რეფერენსი მითითებული მისამართით
+    const storageRef = ref(storage, storagePath);
+    
+    // გამოვითხოვოთ ფაილის ჩამოტვირთვის URL
+    const downloadUrl = await getDownloadURL(storageRef);
+    
+    return downloadUrl;
+  } catch (error) {
+    console.error("Error getting file from storage:", error);
+    return null;
+  }
 } 

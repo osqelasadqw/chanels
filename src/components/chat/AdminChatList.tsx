@@ -3,12 +3,33 @@
 import { useState, useEffect, ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth/AuthProvider";
-import { ref, onValue, off, remove, set } from "firebase/database";
+import { ref, onValue, off, remove, set, push } from "firebase/database";
 import { doc, getDoc, updateDoc, collection, addDoc, query, where, onSnapshot, orderBy, getDocs, deleteDoc } from "firebase/firestore";
 import { db, rtdb } from "@/firebase/config";
 import Image from "next/image";
 import { httpsCallable } from "firebase/functions";
 import { functions } from "@/firebase/config";
+
+// Custom animation styles
+const subtleAnimationStyles = `
+  @keyframes subtlePulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+  }
+  
+  @keyframes subtlePing {
+    0% { transform: scale(1); opacity: 1; }
+    75%, 100% { transform: scale(1.5); opacity: 0; }
+  }
+  
+  .animate-subtle-pulse {
+    animation: subtlePulse 3s ease-in-out infinite;
+  }
+  
+  .animate-subtle-ping {
+    animation: subtlePing 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+  }
+`;
 
 // გაერთიანებული ინტერფეისი ყველა ნოტიფიკაციისთვის
 interface BaseNotification {
@@ -86,9 +107,18 @@ interface AdminChatListProps {
   profilePhotoUploader: ReactNode;
 }
 
+interface ChatTransferStatus {
+  timerEnded?: boolean;
+  primaryOwner?: boolean;
+  transferInitiated?: boolean;
+  transferCompleted?: boolean;
+  buyerConfirmedPayment?: boolean; // დავამატოთ მყიდველის მიერ დადასტურებული გადახდის სტატუსი
+  sellerConfirmedReceipt?: boolean; // დავამატოთ გამყიდველის მიერ თანხის მიღების დადასტურების სტატუსი
+}
+
 export default function AdminChatList({
   userPhoto,
-  userName = "ადმინისტრატორი",
+  userName = "Administrator",
   onOpenProductsModal,
   onOpenEscrowChats,
   profilePhotoUploader
@@ -105,6 +135,7 @@ export default function AdminChatList({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [deleteConfirmation, setDeleteConfirmation] = useState<string | null>(null);
   const [chatTimerStatus, setChatTimerStatus] = useState<Record<string, boolean>>({});
+  const [chatTransferStatus, setChatTransferStatus] = useState<Record<string, ChatTransferStatus>>({}); // ახალი სტეიტი
   const { user } = useAuth();
   const router = useRouter();
 
@@ -233,31 +264,52 @@ export default function AdminChatList({
       // შევქმნათ ყველა ჩატისთვის შემოწმების ფუნქცია
       const fetchChatTimerStatuses = async () => {
         try {
-          const chatStatusesMap: Record<string, boolean> = {};
+          const chatsCollection = collection(db, "chats");
+          const chatsSnapshot = await getDocs(chatsCollection);
           
-          // აქ ვიყენებთ Promise.all რათა პარალელურად შევამოწმოთ ყველა ჩატის სტატუსი
-          await Promise.all(chatIds.map(async (chatId) => {
-            const chatDocRef = doc(db, "chats", chatId);
-            const chatDoc = await getDoc(chatDocRef);
+          const newChatTimerStatus: Record<string, boolean> = {};
+          const newChatTransferStatus: Record<string, ChatTransferStatus> = {};
+          
+          chatsSnapshot.forEach((doc) => {
+            const chatData = doc.data();
+            const chatId = doc.id;
             
-            if (chatDoc.exists()) {
-              const chatData = chatDoc.data();
-              // transferTimerStarted არის ჩვენთვის საინტერესო ველი
-              chatStatusesMap[chatId] = chatData.transferTimerStarted || chatData.timerActive || false;
-            } else {
-              chatStatusesMap[chatId] = false;
-            }
-          }));
+            // Timer status
+            const timerActive = chatData.timerActive || chatData.transferTimerStarted || false;
+            newChatTimerStatus[chatId] = timerActive;
+            
+            // Transfer status
+            newChatTransferStatus[chatId] = {
+              timerEnded: (chatData.transferReady === true),
+              primaryOwner: (chatData.primaryOwnerConfirmed === true),
+              transferInitiated: (chatData.primaryTransferInitiated === true),
+              transferCompleted: (chatData.primaryOwnerConfirmed === true),
+              buyerConfirmedPayment: (chatData.buyerConfirmedPayment === true), // დავამატოთ მყიდველის დადასტურების სტატუსი
+              sellerConfirmedReceipt: (chatData.sellerConfirmedReceipt === true) // დავამატოთ გამყიდველის დადასტურების სტატუსი
+            };
+          });
           
-          // განვაახლოთ სტეიტი
-          setChatTimerStatus(chatStatusesMap);
-        } catch (error) {
-          console.error("Error fetching chat timer statuses:", error);
+          setChatTimerStatus(newChatTimerStatus);
+          setChatTransferStatus(newChatTransferStatus);
+          
+        } catch (err) {
+          console.error("Error fetching chat timer statuses:", err);
         }
       };
       
-      // გამოვიძახოთ ფუნქცია 
+      // გამოვიძახოთ ფუნქცია თავდაპირველად
       fetchChatTimerStatuses();
+      
+      // შევქმნათ ინტერვალი, რომელიც ყოველ 30 წამში შეამოწმებს სტატუსებს
+      const intervalId = setInterval(() => {
+        console.log("🔄 სტატუსების ავტომატური განახლება...");
+        fetchChatTimerStatuses();
+      }, 30000); // 30 წამი
+      
+      // გავასუფთავოთ ინტერვალი როდესაც კომპონენტი აღარ არის მაუნთში
+      return () => {
+        clearInterval(intervalId);
+      };
     }
   }, [paidPayments, user]);
 
@@ -318,7 +370,7 @@ export default function AdminChatList({
     } catch (err) {
       console.error("Error joining chat:", err);
       setError("Failed to join chat");
-      alert("ჩატში გადასვლა ვერ მოხერხდა, გთხოვთ სცადოთ მოგვიანებით");
+      alert("Failed to join chat, please try again later");
     } finally {
       setProcessing(null);
     }
@@ -381,7 +433,7 @@ export default function AdminChatList({
     } catch (err) {
       console.error("Error joining chat from notification:", err);
       setError("Failed to join chat");
-      alert("ჩატში გადასვლა ვერ მოხერხდა, გთხოვთ სცადოთ მოგვიანებით");
+      alert("Failed to join chat, please try again later");
     } finally {
       setProcessing(null);
     }
@@ -404,7 +456,7 @@ export default function AdminChatList({
       setDeleteConfirmation(null);
     } catch (err) {
       console.error("Error deleting notification:", err);
-      setError("შეცდომა შეტყობინების წაშლისას");
+      setError("Failed to delete notification");
     } finally {
       setProcessing(null);
     }
@@ -475,7 +527,7 @@ export default function AdminChatList({
     } catch (err) {
       console.error("Error joining chat from payment notification:", err);
       setError("Failed to join chat");
-      alert("ჩატში გადასვლა ვერ მოხერხდა, გთხოვთ სცადოთ მოგვიანებით");
+      alert("Failed to join chat, please try again later");
     } finally {
       setProcessing(null);
     }
@@ -498,7 +550,7 @@ export default function AdminChatList({
       
     } catch (err) {
       console.error("Error deleting payment notification:", err);
-      setError("შეცდომა გადახდის შეტყობინების წაშლისას");
+      setError("Failed to delete payment notification");
     } finally {
       setProcessing(null);
     }
@@ -562,7 +614,7 @@ export default function AdminChatList({
     } catch (err) {
       console.error("Error joining chat from paid payment:", err);
       setError("Failed to join chat");
-      alert("ჩატში გადასვლა ვერ მოხერხდა, გთხოვთ სცადოთ მოგვიანებით");
+      alert("Failed to join chat, please try again later");
     } finally {
       setProcessing(null);
     }
@@ -585,7 +637,7 @@ export default function AdminChatList({
       
     } catch (err) {
       console.error("Error deleting paid payment:", err);
-      setError("შეცდომა გადახდის ჩანაწერის წაშლისას");
+      setError("Failed to delete paid payment");
     } finally {
       setProcessing(null);
     }
@@ -603,7 +655,7 @@ export default function AdminChatList({
       const chatDoc = await getDoc(chatDocRef);
       
       if (!chatDoc.exists()) {
-        throw new Error("ჩატი ვერ მოიძებნა");
+        throw new Error("Chat not found");
       }
       
       const chatData = chatDoc.data();
@@ -611,7 +663,7 @@ export default function AdminChatList({
       // შევამოწმოთ არის თუ არა ადმინი ჩატის მონაწილე
       if (!chatData.participants.includes(user.id)) {
         // თუ არ არის, ჯერ დავამატოთ ადმინი ჩატში
-        console.log("ადმინისტრატორი ჯერ არ არის ჩატში, ვამატებთ...");
+        console.log("Administrator is not in the chat yet, adding...");
         
         await updateDoc(chatDocRef, {
           adminJoined: true,
@@ -626,7 +678,7 @@ export default function AdminChatList({
           }
         });
         
-        console.log("ადმინისტრატორი წარმატებით დაემატა ჩატში");
+        console.log("Administrator successfully added to chat");
       }
       
       // გამოვიძახოთ Cloud Function ტაიმერის დასაწყებად
@@ -640,7 +692,7 @@ export default function AdminChatList({
         const data = result.data as { success: boolean, transferReadyTime: number };
         
         if (data.success) {
-          alert("ტაიმერი წარმატებით დაიწყო!");
+          alert("Timer started successfully!");
           
           // ლოკალური სტეიტის განახლება ამ ჩატისთვის
           setChatTimerStatus(prevStatus => ({
@@ -648,7 +700,7 @@ export default function AdminChatList({
             [chatId]: true
           }));
         } else {
-          console.warn("სერვერზე ტაიმერის დაწყება ვერ მოხერხდა");
+          console.warn("Failed to start timer on server");
         }
       } catch (functionError) {
         console.error("Cloud Function-ის გამოძახება წარუმატებელია:", functionError);
@@ -657,7 +709,78 @@ export default function AdminChatList({
       
     } catch (error) {
       console.error("Error starting timer:", error);
-      alert(`ტაიმერის დაწყება ვერ მოხერხდა: ${error instanceof Error ? error.message : "უცნობი შეცდომა"}`);
+      alert(`Failed to start timer: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      setProcessing(null);
+    }
+  };
+
+  // დავამატოთ ფუნქცია, რომელიც დაამუშავებს "I am primary owner" ღილაკზე დაჭერას
+  const handleAssignPrimaryOwner = async (chatId: string) => {
+    if (!user || !user.isAdmin) return;
+    
+    try {
+      setProcessing(chatId);
+      
+      const chatDocRef = doc(db, "chats", chatId);
+      const chatDoc = await getDoc(chatDocRef);
+      
+      if (!chatDoc.exists()) {
+        throw new Error("Chat not found");
+      }
+      
+      console.log("Chat before update:", chatDoc.data());
+      
+      // განვაახლოთ ჩატის დოკუმენტი და დავნიშნოთ ადმინი primary owner-ად
+      const updateData = {
+        primaryOwner: user.id,
+        primaryOwnerAssignedAt: Date.now(),
+        transferCompleted: true, // ჩავთვალოთ რომ ტრანსფერი დასრულებულია
+        transferTimerEnded: true // მივუთითოთ რომ ტაიმერი დასრულებულია
+      };
+      
+      console.log("Updating chat with data:", updateData);
+      
+      await updateDoc(chatDocRef, updateData);
+      
+      // ასევე გავაგზავნოთ სისტემური შეტყობინება ჩატში
+      const messagesRef = ref(rtdb, `messages/${chatId}`);
+      await push(messagesRef, {
+        text: `Administrator ${user.name || 'Admin'} has been assigned as primary owner.`,
+        senderId: "system",
+        senderName: "System",
+        timestamp: Date.now(),
+        isSystem: true
+      });
+      
+      console.log("Primary owner assigned successfully");
+      
+      // განვაახლოთ სტეიტები
+      const newChatTimerStatus = {
+        ...chatTimerStatus,
+        [chatId]: false // ტაიმერი აღარ არის აქტიური, რადგან ადმინი გახდა მფლობელი
+      };
+      
+      const newChatTransferStatus = {
+        ...chatTransferStatus,
+        [chatId]: {
+          ...chatTransferStatus[chatId],
+          transferCompleted: true, // დავამატოთ ტრანსფერის დასრულების მარკერი
+          primaryOwner: true // Add new flag to indicate admin is primary owner
+        }
+      };
+      
+      console.log("New chat timer status:", newChatTimerStatus);
+      console.log("New chat transfer status:", newChatTransferStatus);
+      
+      setChatTimerStatus(newChatTimerStatus);
+      setChatTransferStatus(newChatTransferStatus);
+      
+      alert("You have successfully assigned the primary owner!");
+      
+    } catch (error) {
+      console.error("Error assigning primary owner:", error);
+      alert(`Failed to assign primary owner: ${error instanceof Error ? error.message : "Unknown error"}`);
     } finally {
       setProcessing(null);
     }
@@ -713,7 +836,7 @@ export default function AdminChatList({
             </div>
             <div>
               <h1 className="text-xl font-bold text-white">Escrow Agent Dashboard</h1>
-              <p className="text-sm text-indigo-200">მართეთ ესქროუ სერვისები მაღალი უსაფრთხოებით</p>
+              <p className="text-sm text-indigo-200">Manage escrow services with high security</p>
             </div>
           </div>
           
@@ -723,9 +846,9 @@ export default function AdminChatList({
               className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-blue-500 transition-colors duration-150"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1.5" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M10 2a4 4 0 00-4 4v1H5a1 1 0 00-.994.89l-1 9A1 1 0 004 18h12a1 1 0 00.994-1.11l-1-9A1 1 0 0015 7h-1V6a4 4 0 00-4-4zm2 5V6a2 2 0 10-4 0v1h4zm-6 3a1 1 0 112 0 1 1 0 01-2 0zm7-1a1 1 0 100 2 1 1 0 000-2z" clipRule="evenodd" />
+                <path fillRule="evenodd" d="M10 2a4 4 0 00-4 4v1H5a1 1 0 00-.994.89l-1 9A1 1 0 004 18h12a1 1 0 00.994-1.11l-1-9A1 1 0 0015 7h-1V6a4 4 0 00-4-4zm2 5V6a2 2 0 10-4 0v1h4zm-6 3a1 1 0 112 0 1 1 0 01-2 0zm7-1a1 1 0 100 2 1 1 0 000-2H9z" clipRule="evenodd" />
               </svg>
-              პროდუქტების მართვა
+              Product Management
             </button>
             
             <button 
@@ -736,7 +859,7 @@ export default function AdminChatList({
                 <path d="M2 5a2 2 0 012-2h7a2 2 0 012 2v4a2 2 0 01-2 2H9l-3 3v-3H4a2 2 0 01-2-2V5z" />
                 <path d="M15 7v2a4 4 0 01-4 4H9.828l-1.766 1.767c.28.149.599.233.938.233h2l3 3v-3h2a2 2 0 002-2V9a2 2 0 00-2-2h-1z" />
               </svg>
-              პირადი ჩატები
+              Private Chats
             </button>
             
             {profilePhotoUploader}
@@ -748,6 +871,9 @@ export default function AdminChatList({
 
   return (
     <div className="bg-gradient-to-br from-white to-gray-50 rounded-xl shadow-xl border border-gray-200 overflow-hidden w-full">
+      {/* Add style tag for custom animations */}
+      <style jsx>{subtleAnimationStyles}</style>
+      
       <div className="p-6 sm:p-8 border-b bg-gradient-to-r from-gray-800 to-indigo-900 text-white rounded-t-xl">
         <div className="flex flex-col sm:flex-row items-start justify-between">
           <div className="flex items-center mb-4 sm:mb-0">
@@ -772,7 +898,7 @@ export default function AdminChatList({
             </div>
             <div>
               <h1 className="text-xl font-bold text-white">Escrow Agent Dashboard</h1>
-              <p className="text-sm text-indigo-200">მართეთ ესქროუ სერვისები მაღალი უსაფრთხოებით</p>
+              <p className="text-sm text-indigo-200">Manage escrow services with high security</p>
             </div>
           </div>
           
@@ -784,7 +910,7 @@ export default function AdminChatList({
               <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1.5" viewBox="0 0 20 20" fill="currentColor">
                 <path fillRule="evenodd" d="M10 2a4 4 0 00-4 4v1H5a1 1 0 00-.994.89l-1 9A1 1 0 004 18h12a1 1 0 00.994-1.11l-1-9A1 1 0 0015 7h-1V6a4 4 0 00-4-4zm2 5V6a2 2 0 10-4 0v1h4zm-6 3a1 1 0 112 0 1 1 0 01-2 0zm7-1a1 1 0 100 2 1 1 0 000-2H9z" clipRule="evenodd" />
               </svg>
-              პროდუქტების მართვა
+              Product Management
             </button>
             
             <button 
@@ -795,7 +921,7 @@ export default function AdminChatList({
                 <path d="M2 5a2 2 0 012-2h7a2 2 0 012 2v4a2 2 0 01-2 2H9l-3 3v-3H4a2 2 0 01-2-2V5z" />
                 <path d="M15 7v2a4 4 0 01-4 4H9.828l-1.766 1.767c.28.149.599.233.938.233h2l3 3v-3h2a2 2 0 002-2V9a2 2 0 00-2-2h-1z" />
               </svg>
-              პირადი ჩატები
+              Private Chats
             </button>
             
             {profilePhotoUploader}
@@ -804,6 +930,8 @@ export default function AdminChatList({
       </div>
       
       <div className="p-6">
+        
+
         {/* თუ გვაქვს ესქროუ მოთხოვნები */}
         {/* საფულის მისამართები */}
         {paidPayments.length > 0 && (
@@ -816,21 +944,43 @@ export default function AdminChatList({
                     <path fillRule="evenodd" d="M18 9H2v5a2 2 0 002 2h12a2 2 0 002-2V9zM4 13a1 1 0 011-1h1a1 1 0 110 2H5a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2H9z" clipRule="evenodd" />
                   </svg>
                 </span>
-                <h3 className="text-lg font-semibold">საფულის მისამართები <span className="bg-green-100 text-green-800 text-xs font-medium px-2 py-0.5 rounded-full ml-2">{paidPayments.length}</span></h3>
+                <h3 className="text-lg font-semibold">Wallet Addresses <span className="bg-green-100 text-green-800 text-xs font-medium px-2 py-0.5 rounded-full ml-2">{paidPayments.length}</span></h3>
               </div>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
-                  <svg className="w-4 h-4 text-gray-500" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 20 20">
-                    <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m19 19-4-4m0-7A7 7 0 1 1 1 8a7 7 0 0 1 14 0Z"/>
-                  </svg>
+              <div className="flex items-center space-x-4">
+                <div className="flex items-center space-x-2">
+                  <div className="flex gap-2 mr-4">
+                    <div className="flex items-center">
+                      <div className="w-3 h-3 bg-green-700 rounded-full mr-1"></div>
+                      <span className="text-xs text-gray-700">Completed</span>
+                    </div>
+                    <div className="flex items-center">
+                      <div className="w-3 h-3 bg-blue-500 rounded-full mr-1"></div>
+                      <span className="text-xs text-gray-700"> Primary Owner</span>
+                    </div>
+                    <div className="flex items-center">
+                      <div className="w-3 h-3 bg-yellow-100 rounded-full mr-1"></div>
+                      <span className="text-xs text-gray-700">Timer</span>
+                    </div>
+                    <div className="flex items-center">
+                      <div className="w-3 h-3 bg-red-100 rounded-full mr-1"></div>
+                      <span className="text-xs text-gray-700">Transfer</span>
+                    </div>
+                  </div>
                 </div>
-                <input 
-                  type="text" 
-                  placeholder="ძებნა..." 
-                  className="block w-full p-2 pl-10 text-sm text-gray-900 border border-gray-300 rounded-lg bg-white focus:ring-blue-500 focus:border-blue-500" 
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                />
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                    <svg className="w-4 h-4 text-gray-500" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 20 20">
+                      <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m19 19-4-4m0-7A7 7 0 1 1 1 8a7 7 0 0 1 14 0Z"/>
+                    </svg>
+                  </div>
+                  <input 
+                    type="text" 
+                    placeholder="Search..." 
+                    className="block w-full p-2 pl-10 text-sm text-gray-900 border border-gray-300 rounded-lg bg-white focus:ring-blue-500 focus:border-blue-500" 
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                </div>
               </div>
             </div>
 
@@ -840,18 +990,46 @@ export default function AdminChatList({
                   <table className="w-full border-collapse">
                     <thead className="bg-green-600 text-white sticky top-0 z-10">
                       <tr>
-                        <th className="px-4 py-2 text-left border-r border-green-500">ჯამი სახელი / ფასი</th>
-                        <th className="px-4 py-2 text-left border-r border-green-500">მყიდველი / გამყიდველი</th>
-                        <th className="px-4 py-2 text-left border-r border-green-500">საფულის მისამართი</th>
-                        <th className="px-4 py-2 text-left border-r border-green-500">ტრანზაქცია</th>
-                        <th className="px-4 py-2 text-left border-r border-green-500">თარიღი</th>
-                        <th className="px-4 py-2 text-center">მოქმედება</th>
+                        <th className="px-4 py-2 text-left border-r border-green-500">Product Name / Price</th>
+                        <th className="px-4 py-2 text-left border-r border-green-500">Buyer / Seller</th>
+                        <th className="px-4 py-2 text-left border-r border-green-500">Wallet Address</th>
+                        <th className="px-4 py-2 text-left border-r border-emerald-500 bg-emerald-600">Transaction</th>
+                        <th className="px-4 py-2 text-left border-r border-green-500">Date</th>
+                        <th className="px-4 py-2 text-center">Action</th>
                       </tr>
                     </thead>
                     <tbody>
                       {paidPayments.map((payment, index) => (
-                        <tr key={payment.id} className={`border-b ${index % 2 === 0 ? 'bg-gray-50' : 'bg-white'} hover:bg-gray-100`}>
-                          <td className="px-4 py-4 border-r border-gray-200">
+                        <tr key={payment.id} className={`border-b ${
+                          chatTransferStatus[payment.chatId]?.buyerConfirmedPayment 
+                            ? 'bg-green-100 animate-subtle-pulse' // მწვანე ფონი მყიდველის მიერ დადასტურებული გადახდისთვის
+                            : chatTransferStatus[payment.chatId]?.primaryOwner
+                              ? 'bg-blue-100 animate-subtle-pulse' // Light blue for primary owner
+                              : chatTransferStatus[payment.chatId]?.transferInitiated && !chatTransferStatus[payment.chatId]?.transferCompleted 
+                                ? 'bg-red-100 animate-subtle-pulse' 
+                                : chatTransferStatus[payment.chatId]?.timerEnded 
+                                  ? 'bg-yellow-100 animate-subtle-pulse' 
+                                  : chatTimerStatus[payment.chatId]
+                                    ? 'bg-yellow-100 animate-subtle-pulse'
+                                    : !chatTimerStatus[payment.chatId] 
+                                      ? 'bg-gray-100' 
+                                      : index % 2 === 0 ? 'bg-gray-50' : 'bg-white'
+                        } hover:bg-gray-100`}>
+                          <td className={`px-4 py-4 border-r border-gray-200 ${
+  chatTransferStatus[payment.chatId]?.buyerConfirmedPayment
+    ? 'bg-green-100'
+    : chatTransferStatus[payment.chatId]?.primaryOwner
+      ? 'bg-blue-100'
+      : chatTransferStatus[payment.chatId]?.transferInitiated && !chatTransferStatus[payment.chatId]?.transferCompleted 
+        ? 'bg-red-100' 
+        : chatTransferStatus[payment.chatId]?.timerEnded 
+          ? 'bg-yellow-100' 
+          : chatTimerStatus[payment.chatId]
+            ? 'bg-yellow-100'
+            : !chatTimerStatus[payment.chatId] 
+              ? 'bg-gray-100' 
+              : ''
+}`}>
                             <div className="flex items-center">
                               <div className="bg-green-100 p-2 rounded-full flex items-center justify-center mr-3">
                                 <svg className="h-5 w-5 text-green-600" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
@@ -860,62 +1038,162 @@ export default function AdminChatList({
                                 </svg>
                               </div>
                               <div>
-                                <div className="font-medium">{payment.chatName || "პროდუქტი"}</div>
+                                <div className="font-medium">{payment.chatName || "Product"}</div>
                                 <div className="text-sm text-gray-500">${payment.amount}</div>
                               </div>
                             </div>
                           </td>
-                          <td className="px-4 py-4 border-r border-gray-200">
+                          <td className={`px-4 py-4 border-r border-gray-200 ${
+  chatTransferStatus[payment.chatId]?.buyerConfirmedPayment
+    ? 'bg-green-100'
+    : chatTransferStatus[payment.chatId]?.primaryOwner
+      ? 'bg-blue-100'
+      : chatTransferStatus[payment.chatId]?.transferInitiated && !chatTransferStatus[payment.chatId]?.transferCompleted 
+        ? 'bg-red-100' 
+        : chatTransferStatus[payment.chatId]?.timerEnded 
+          ? 'bg-yellow-100' 
+          : chatTimerStatus[payment.chatId]
+            ? 'bg-yellow-100'
+            : !chatTimerStatus[payment.chatId] 
+              ? 'bg-gray-100' 
+              : ''
+}`}>
                             <div className="flex flex-col">
                               <div className="flex items-center text-sm">
                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1 text-blue-500" viewBox="0 0 20 20" fill="currentColor">
                                   <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
                                 </svg>
-                                <span className="text-blue-600 font-medium">მყიდველი:</span>
+                                <span className="text-blue-600 font-medium">Buyer:</span>
                                 <span className="ml-1">{payment.buyerName || "N/A"}</span>
                               </div>
                               <div className="flex items-center text-sm mt-1">
                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1 text-purple-500" viewBox="0 0 20 20" fill="currentColor">
                                   <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
                                 </svg>
-                                <span className="text-purple-600 font-medium">გამყიდველი:</span>
+                                <span className="text-purple-600 font-medium">Seller:</span>
                                 <span className="ml-1">{payment.sellerName || "N/A"}</span>
                               </div>
                               <div className="flex items-center mt-1.5">
-                                {chatTimerStatus[payment.chatId] ? (
+                                {chatTransferStatus[payment.chatId]?.buyerConfirmedPayment ? (
                                   <div className="flex items-center text-xs">
                                     <div className="relative">
-                                      <div className="h-3 w-3 bg-green-500 rounded-full animate-pulse"></div>
+                                      <div className="h-3 w-3 bg-green-700 rounded-full animate-subtle-pulse"></div>
+                                      <span className="absolute -top-1 -right-1 h-2 w-2 bg-green-500 rounded-full"></span>
+                                    </div>
+                                    <span className="ml-1.5 text-green-700 font-bold">DONE</span>
+                                  </div>
+                                ) : chatTransferStatus[payment.chatId]?.primaryOwner ? (
+                                  <div className="flex items-center text-xs">
+                                    <div className="relative">
+                                      <div className="h-3 w-3 bg-blue-500 rounded-full animate-subtle-pulse"></div>
+                                      <span className="absolute -top-1 -right-1 h-2 w-2 bg-blue-300 rounded-full"></span>
+                                    </div>
+                                    <span className="ml-1.5 text-blue-600 font-medium">I am primary owner</span>
+                                  </div>
+                                ) : chatTimerStatus[payment.chatId] && 
+                                    !chatTransferStatus[payment.chatId]?.timerEnded && 
+                                    !chatTransferStatus[payment.chatId]?.transferInitiated ? (
+                                  <div className="flex items-center text-xs">
+                                    <div className="relative">
+                                      <div className="h-3 w-3 bg-green-500 rounded-full animate-subtle-pulse"></div>
                                       <span className="absolute -top-1 -right-1 h-2 w-2 bg-green-300 rounded-full"></span>
                                     </div>
-                                    <span className="ml-1.5 text-green-600 font-medium">ტაიმერი აქტიურია</span>
+                                    <span className="ml-1.5 text-green-600 font-medium">Timer Active</span>
+                                  </div>
+                                ) : chatTransferStatus[payment.chatId]?.timerEnded ? (
+                                  <div className="flex items-center text-xs">
+                                    <div className="relative">
+                                      <div className="h-3 w-3 bg-yellow-500 rounded-full animate-subtle-pulse"></div>
+                                      <span className="absolute -top-1 -right-1 h-2 w-2 bg-yellow-300 rounded-full animate-subtle-ping"></span>
+                                    </div>
+                                    <span className="ml-1.5 text-yellow-600 font-semibold">Timer Ended</span>
                                   </div>
                                 ) : (
                                   <div className="flex items-center text-xs">
-                                    <div className="h-3 w-3 bg-gray-300 rounded-full"></div>
-                                    <span className="ml-1.5 text-gray-500">ტაიმერი არ არის აქტიური</span>
+                                    <div className="relative">
+                                      <div className="h-3 w-3 bg-gray-400 rounded-full"></div>
+                                      <span className="absolute -top-1 -right-1 h-2 w-2 bg-gray-300 rounded-full"></span>
+                                    </div>
+                                    <span className="ml-1.5 text-gray-600 font-medium">Timer Not Started</span>
                                   </div>
                                 )}
                               </div>
+                              {/* მფლობელობის გადაცემის ინდიკატორი */}
+                              {chatTransferStatus[payment.chatId]?.transferInitiated && !chatTransferStatus[payment.chatId]?.transferCompleted && (
+                                <div className="flex items-center mt-1.5">
+                                  <div className="relative">
+                                    <div className="h-3 w-3 bg-red-500 rounded-full animate-subtle-pulse"></div>
+                                    <span className="absolute -top-1 -right-1 h-2 w-2 bg-red-300 rounded-full animate-subtle-ping"></span>
+                                  </div>
+                                  <span className="ml-1.5 text-red-600 font-medium text-xs">Ownership transferred - confirmation needed!</span>
+                                </div>
+                              )}
                             </div>
                           </td>
-                          <td className="px-4 py-4 border-r border-gray-200">
+                          <td className={`px-4 py-4 border-r border-gray-200 ${
+  chatTransferStatus[payment.chatId]?.buyerConfirmedPayment
+    ? 'bg-green-100'
+    : chatTransferStatus[payment.chatId]?.primaryOwner
+      ? 'bg-blue-100'
+      : chatTransferStatus[payment.chatId]?.transferInitiated && !chatTransferStatus[payment.chatId]?.transferCompleted 
+        ? 'bg-red-100' 
+        : chatTransferStatus[payment.chatId]?.timerEnded 
+          ? 'bg-yellow-100' 
+          : chatTimerStatus[payment.chatId]
+            ? 'bg-yellow-100'
+            : !chatTimerStatus[payment.chatId] 
+              ? 'bg-gray-100' 
+              : ''
+}`}>
                             <div className="text-center">
                               <span className="bg-gray-100 text-gray-800 py-1 px-2 rounded font-mono text-xs inline-block">
                                 {payment.stripeSessionId ? payment.stripeSessionId.substring(0, 16) + "..." : "N/A"}
                               </span>
                             </div>
                           </td>
-                          <td className="px-4 py-4 border-r border-gray-200">
+                          <td className={`px-4 py-4 border-r border-gray-200 ${
+  chatTransferStatus[payment.chatId]?.buyerConfirmedPayment
+    ? 'bg-green-100'
+    : chatTransferStatus[payment.chatId]?.primaryOwner
+      ? 'bg-blue-100'
+      : chatTransferStatus[payment.chatId]?.transferInitiated && !chatTransferStatus[payment.chatId]?.transferCompleted 
+        ? 'bg-red-100' 
+        : chatTransferStatus[payment.chatId]?.timerEnded 
+          ? 'bg-yellow-100' 
+          : chatTimerStatus[payment.chatId]
+            ? 'bg-yellow-100'
+            : !chatTimerStatus[payment.chatId] 
+              ? 'bg-gray-100' 
+              : ''
+}`}>
                             <div className="flex justify-center">
-                              <span className={`py-1 px-3 rounded-full text-xs inline-block ${payment.paymentMethod === 'stripe' ? 'bg-blue-50 text-blue-600' : 'bg-yellow-50 text-yellow-600'}`}>
-                                {payment.paymentMethod === 'stripe' ? 'Stripe' : 'Bitcoin'}
-                              </span>
+                              {chatTransferStatus[payment.chatId]?.buyerConfirmedPayment ? (
+                                <span className="py-1 px-3 rounded-full text-xs inline-block bg-green-700 text-white font-bold">
+                                  DONE
+                                </span>
+                              ) : (
+                                <span className={`py-1 px-3 rounded-full text-xs inline-block ${payment.paymentMethod === 'stripe' ? 'bg-blue-50 text-blue-600' : 'bg-yellow-50 text-yellow-600'}`}>
+                                  {payment.paymentMethod === 'stripe' ? 'Stripe' : 'Bitcoin'}
+                                </span>
+                              )}
                             </div>
                           </td>
-                          <td className="px-4 py-4 border-r border-gray-200">
+                          <td className={`px-4 py-4 border-r border-gray-200 ${
+  chatTransferStatus[payment.chatId]?.buyerConfirmedPayment
+    ? 'bg-green-100'
+    : chatTransferStatus[payment.chatId]?.primaryOwner
+      ? 'bg-blue-100'
+      : chatTransferStatus[payment.chatId]?.transferInitiated && !chatTransferStatus[payment.chatId]?.transferCompleted 
+        ? 'bg-red-100' 
+        : chatTransferStatus[payment.chatId]?.timerEnded 
+          ? 'bg-yellow-100' 
+          : chatTimerStatus[payment.chatId]
+            ? 'bg-yellow-100'
+            : !chatTimerStatus[payment.chatId] 
+              ? 'bg-gray-100' 
+              : ''
+}`}>
                             <div className="flex flex-col">
-                              <div className="text-sm text-purple-700">ID: {payment.id.substring(0, 7)}</div>
                               <div className="text-xs text-gray-500 flex items-center">
                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -924,38 +1202,69 @@ export default function AdminChatList({
                               </div>
                             </div>
                           </td>
-                          <td className="px-4 py-4">
+                          <td className={`px-4 py-4 relative ${
+  chatTransferStatus[payment.chatId]?.buyerConfirmedPayment
+    ? 'bg-green-100'
+    : chatTransferStatus[payment.chatId]?.primaryOwner
+      ? 'bg-blue-100'
+      : chatTransferStatus[payment.chatId]?.transferInitiated && !chatTransferStatus[payment.chatId]?.transferCompleted 
+        ? 'bg-red-100' 
+        : chatTransferStatus[payment.chatId]?.timerEnded 
+          ? 'bg-yellow-100' 
+          : chatTimerStatus[payment.chatId]
+            ? 'bg-yellow-100'
+            : !chatTimerStatus[payment.chatId] 
+              ? 'bg-gray-100' 
+              : ''
+}`}>
+
                             <div className="flex justify-center gap-1">
                               <button 
                                 onClick={() => handleJoinChatFromPaidPayment(payment)}
                                 disabled={processing === payment.id}
                                 className="px-3 py-1 bg-green-500 text-white text-xs font-medium rounded hover:bg-green-600 transition-colors"
                               >
-                                ჩატში
+                                To Chat
                               </button>
-                              <button 
-                                onClick={() => handleStartTimer(payment.chatId)}
-                                disabled={processing === payment.chatId || processing === payment.id || chatTimerStatus[payment.chatId]}
-                                className={`px-3 py-1 ${chatTimerStatus[payment.chatId] ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-500 hover:bg-blue-600'} text-white text-xs font-medium rounded transition-colors`}
-                              >
-                                {processing === payment.chatId ? (
-                                  <div className="flex items-center justify-center">
-                                    <div className="animate-spin rounded-full h-3 w-3 border-2 border-white border-t-transparent mr-1"></div>
-                                    <span>...</span>
-                                  </div>
-                                ) : chatTimerStatus[payment.chatId] ? 'აქტიურია' : 'დაწყება'}
-                              </button>
-                              <button 
-                                className="px-3 py-1 bg-gray-500 text-white text-xs font-medium rounded hover:bg-gray-600 transition-colors"
-                              >
-                                დეტალურად
-                              </button>
+                              {!chatTransferStatus[payment.chatId]?.timerEnded && 
+                               !chatTransferStatus[payment.chatId]?.primaryOwner &&
+                               !chatTransferStatus[payment.chatId]?.transferInitiated &&
+                               !chatTransferStatus[payment.chatId]?.buyerConfirmedPayment &&
+                               !chatTransferStatus[payment.chatId]?.sellerConfirmedReceipt && (
+                                <button 
+                                  onClick={() => handleStartTimer(payment.chatId)}
+                                  disabled={processing === payment.chatId || processing === payment.id || chatTimerStatus[payment.chatId]}
+                                  title={chatTimerStatus[payment.chatId] ? "Timer is already active" : "Start the timer for this transaction"}
+                                  className={`px-3 py-1 ${chatTimerStatus[payment.chatId] ? 'bg-green-600 hover:bg-green-700 cursor-not-allowed opacity-80' : 'bg-blue-500 hover:bg-blue-600'} text-white text-xs font-medium rounded transition-colors`}
+                                >
+                                  {processing === payment.chatId ? (
+                                    <div className="flex items-center justify-center">
+                                      <div className="animate-spin rounded-full h-3 w-3 border-2 border-white border-t-transparent mr-1"></div>
+                                      <span>...</span>
+                                    </div>
+                                  ) : chatTimerStatus[payment.chatId] ? 'Active' : 'Start'}
+                                </button>
+                              )}
+                              {/* დავამატოთ "I am primary owner" ღილაკი მხოლოდ მაშინ როცა:
+                                  1. მყიდველმა დაადასტურა გადაცემა (transferInitiated: true)
+                                  2. ტრანსფერი ჯერ არ დასრულებულა (transferCompleted: false) */}
+                              {chatTransferStatus[payment.chatId]?.transferInitiated && 
+                                !chatTransferStatus[payment.chatId]?.transferCompleted && 
+                                !chatTransferStatus[payment.chatId]?.primaryOwner && (
+                                <button 
+                                  onClick={() => handleAssignPrimaryOwner(payment.chatId)}
+                                  disabled={processing === payment.chatId || processing === payment.id}
+                                  className="px-3 py-1 bg-red-600 text-white text-xs font-medium rounded hover:bg-red-700 transition-colors animate-subtle-pulse shadow-lg border-2 border-red-400"
+                                >
+                                  I am primary owner
+                                </button>
+                              )}
                               <button 
                                 onClick={() => handleDeletePaidPayment(payment.id)}
                                 disabled={processing === payment.id}
                                 className="px-3 py-1 bg-red-500 text-white text-xs font-medium rounded hover:bg-red-600 transition-colors"
                               >
-                                წაშლა
+                                Delete
                               </button>
                             </div>
                           </td>
@@ -977,7 +1286,7 @@ export default function AdminChatList({
                 <path d="M4 4a2 2 0 00-2 2v1h16V6a2 2 0 00-2-2H4z" />
                 <path fillRule="evenodd" d="M18 9H2v5a2 2 0 002 2h12a2 2 0 002-2V9zM4 13a1 1 0 011-1h1a1 1 0 110 2H5a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2H9z" clipRule="evenodd" />
               </svg>
-              საფულის ინფორმაცია ({walletNotifications.length})
+              Wallet Information ({walletNotifications.length})
             </h3>
             <div className="grid gap-4 grid-cols-1 md:grid-cols-2 xl:grid-cols-3 max-h-[50vh] sm:max-h-[60vh] md:max-h-[70vh] lg:max-h-[75vh] overflow-y-auto pr-2">
               {walletNotifications.map((notification) => (
@@ -987,16 +1296,16 @@ export default function AdminChatList({
                       {new Date(notification.createdAt).toLocaleString()}
                     </div>
                     <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-indigo-100 text-indigo-800">
-                      {notification.read ? 'წაკითხული' : 'ახალი'}
+                      {notification.read ? 'Read' : 'New'}
                     </span>
                   </div>
                   <div className="mt-2">
                     <div className="text-base font-semibold text-gray-900">
-                      პროდუქტი: {notification.productName}
+                      Product: {notification.productName}
                     </div>
                     <div className="mt-2 text-sm text-gray-600">
-                      <p>მყიდველი: {notification.buyerName}</p>
-                      <p>გამყიდველი: {notification.sellerName}</p>
+                      <p>Buyer: {notification.buyerName}</p>
+                      <p>Seller: {notification.sellerName}</p>
                       <p className="mt-1 font-mono text-xs bg-gray-100 rounded p-1">
                         {notification.walletAddress}
                       </p>
@@ -1008,7 +1317,7 @@ export default function AdminChatList({
                       disabled={processing === notification.id}
                       className="flex-1 inline-flex justify-center items-center px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {processing === notification.id ? 'მიმდინარეობს...' : 'ჩატში შესვლა'}
+                      {processing === notification.id ? 'Processing...' : 'Join Chat'}
                     </button>
                     <button
                       onClick={() => handleDeleteNotification(notification.id)}
@@ -1031,7 +1340,7 @@ export default function AdminChatList({
         <div className="fixed inset-0 flex items-center justify-center z-50 bg-gray-800 bg-opacity-75">
           <div className="bg-white rounded-lg p-6 max-w-lg w-full">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-medium">ინფორმაცია</h3>
+              <h3 className="text-lg font-medium">Information</h3>
               <button 
                 onClick={() => setShowDetailsModal(false)}
                 className="text-gray-400 hover:text-gray-500"
@@ -1043,30 +1352,30 @@ export default function AdminChatList({
             </div>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700">პროდუქტის სახელი</label>
+                <label className="block text-sm font-medium text-gray-700">Product Name</label>
                 <p className="mt-1 text-sm text-gray-900">{selectedNotification.productName}</p>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">საფულის მისამართი</label>
+                <label className="block text-sm font-medium text-gray-700">Wallet Address</label>
                 <p className="mt-1 text-sm text-gray-900 font-mono break-all">{selectedNotification.walletAddress}</p>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">მყიდველი</label>
+                  <label className="block text-sm font-medium text-gray-700">Buyer</label>
                   <p className="mt-1 text-sm text-gray-900">{selectedNotification.buyerName}</p>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">გამყიდველი</label>
+                  <label className="block text-sm font-medium text-gray-700">Seller</label>
                   <p className="mt-1 text-sm text-gray-900">{selectedNotification.sellerName}</p>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">თანხა</label>
+                  <label className="block text-sm font-medium text-gray-700">Amount</label>
                   <p className="mt-1 text-sm text-gray-900">${selectedNotification.amount}</p>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">გადახდის მეთოდი</label>
+                  <label className="block text-sm font-medium text-gray-700">Payment Method</label>
                   <p className="mt-1 text-sm text-gray-900">{selectedNotification.paymentMethod}</p>
                 </div>
               </div>
@@ -1076,18 +1385,19 @@ export default function AdminChatList({
                 onClick={() => setShowDetailsModal(false)}
                 className="inline-flex justify-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
               >
-                დახურვა
+                Close
               </button>
               <button
                 onClick={() => handleJoinChatFromNotification(selectedNotification)}
                 className="inline-flex justify-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
               >
-                ჩატში შესვლა
+                Join Chat
               </button>
             </div>
           </div>
         </div>
       )}
+
     </div>
   );
 } 

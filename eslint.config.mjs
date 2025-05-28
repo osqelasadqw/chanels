@@ -35,7 +35,6 @@ const eslintConfig = [
       "src/components/chat/AdminChatList.tsx",
       "src/app/admin/page.tsx",
       "src/app/chats/[id]/page.tsx",
-      "src/app/my-products/page.tsx",
       "src/app/page.tsx",
       "src/app/products/[id]/contact/page.tsx"
     ],

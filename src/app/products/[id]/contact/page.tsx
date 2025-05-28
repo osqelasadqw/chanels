@@ -18,7 +18,7 @@ interface ContactPageProps {
 
 export default function ContactPage({ params }: ContactPageProps) {
   const pathname = usePathname();
-  const productId = pathname.split('/').filter(Boolean).at(-2) || '';
+  const productId = pathname?.split('/').filter(Boolean).at(-2) || params.id || '';
   
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);

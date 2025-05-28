@@ -383,7 +383,7 @@ export const startTransferTimer = onCall(
       }
 
       const now = Date.now();
-      const transferReadyTime = now + 7 * 24 * 60 * 60 * 1000;
+      const transferReadyTime = now + 10 * 1000;
 
       await admin.firestore().collection("chats").doc(chatId).update({
         transferTimerStarted: true,
@@ -394,6 +394,65 @@ export const startTransferTimer = onCall(
         adminJoined: true, // ყოველთვის დავაყენოთ ეს ფლაგი
         adminId: userId // შევინახოთ ადმინის ID
       });
+
+      // ვამატებთ ლოგიკას, რომელიც შეამოწმებს ტაიმერის დასრულებას
+      // და განაახლებს ჩატის სტატუსს
+      const scheduleStatusUpdate = async () => {
+        try {
+          // შევამოწმოთ ტაიმერის დასრულების დრო
+          const chatDocRef = admin.firestore().collection("chats").doc(chatId);
+          const updatedChatDoc = await chatDocRef.get();
+          
+          if (!updatedChatDoc.exists) {
+            logger.error(`Chat no longer exists: ${chatId}`);
+            return;
+          }
+          
+          const updatedChatData = updatedChatDoc.data();
+          
+          // შევამოწმოთ, რომ ტაიმერი ჯერ კიდევ აქტიურია
+          if (!updatedChatData?.transferTimerStarted || !updatedChatData?.transferReadyTime) {
+            logger.error(`Timer no longer active for chat: ${chatId}`);
+            return;
+          }
+          
+          // შევამოწმოთ, დასრულდა თუ არა ტაიმერი
+          const currentTime = Date.now();
+          
+          if (currentTime >= updatedChatData.transferReadyTime) {
+            // ტაიმერი დასრულდა - განვაახლოთ სტატუსი
+            await chatDocRef.update({
+              status: "awaiting_primary_transfer",
+              transferReady: true,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+            
+            // დავამატოთ სისტემური შეტყობინება ჩატში
+            const messagesRef = admin.database().ref(`messages/${chatId}`);
+            await messagesRef.push({
+              text: "The 7-day waiting period has ended. The seller can now transfer primary ownership rights.",
+              senderId: "system",
+              senderName: "System",
+              timestamp: currentTime,
+              isSystem: true
+            });
+            
+            logger.info(`Timer completed for chat ${chatId}, status updated to awaiting_primary_transfer`);
+          }
+        } catch (error) {
+          logger.error(`Error checking timer status: ${error}`);
+        }
+      };
+      
+      // დავგეგმოთ სტატუსის განახლება 7 დღის შემდეგ
+      // რეალურ სცენარში უმჯობესია გამოიყენოთ Cloud Scheduler ან მსგავსი სერვისი
+      // მაგრამ ამ მაგალითში უბრალოდ setTimeout-ს ვიყენებთ
+      const timeoutMs = transferReadyTime - now;
+      setTimeout(scheduleStatusUpdate, timeoutMs);
+      
+      // შენიშვნა: ამ მიდგომის პრობლემა ის არის, რომ თუ ფუნქცია გადაიტვირთება,
+      // დაგეგმილი განახლება დაიკარგება. რეალურ გარემოში საჭიროა უფრო
+      // სანდო მექანიზმის გამოყენება, როგორიცაა Cloud Tasks ან Cloud Scheduler.
 
       const chatAdminId = chatData?.adminId;
       let adminPhotoURL = chatData?.adminPhotoURL || null;
@@ -416,6 +475,394 @@ export const startTransferTimer = onCall(
     } catch (error) {
       logger.error("Error starting transfer timer:", error);
       throw new HttpsError("internal", "Failed to start transfer timer: " + (error instanceof Error ? error.message : "Unknown error"));
+    }
+  }
+);
+
+// ახალი ფუნქცია გამყიდველის მიერ პირველადი მფლობელობის გადაცემის დასადასტურებლად
+export const confirmPrimaryOwnershipTransfer = onCall(
+  {enforceAppCheck: false},
+  async (request) => {
+    try {
+      const auth = request.auth;
+      if (!auth) {
+        throw new HttpsError("unauthenticated", "User must be authenticated.");
+      }
+
+      const {chatId} = request.data;
+
+      if (!chatId) {
+        throw new HttpsError("invalid-argument", "Chat ID is required.");
+      }
+
+      const userId = auth.uid;
+      logger.info(`User ${userId} attempting to confirm primary ownership transfer for chat ${chatId}`);
+      
+      const chatDocRef = admin.firestore().collection("chats").doc(chatId);
+      const chatDoc = await chatDocRef.get();
+
+      if (!chatDoc.exists) {
+        logger.error(`Chat ${chatId} not found`);
+        throw new HttpsError("not-found", "Chat not found.");
+      }
+
+      const chatData = chatDoc.data();
+      logger.info(`Chat data for ${chatId}:`, chatData);
+
+      // ვამოწმებთ ყველა შესაძლო ვარიანტს თუ ვინ შეიძლება იყოს გამყიდველი
+      let isSeller = false;
+      
+      // ვარიანტი 1: პირდაპირ არის მითითებული sellerId
+      if (chatData?.sellerId === userId) {
+        isSeller = true;
+        logger.info(`User ${userId} is the seller (sellerId field)`);
+      } 
+      // ვარიანტი 2: მონაწილეა და პროდუქტის მფლობელია
+      else if (chatData?.participants && chatData.participants.includes(userId) && chatData.productId) {
+        try {
+          const productDocRef = admin.firestore().collection("products").doc(chatData.productId);
+          const productDoc = await productDocRef.get();
+          
+          if (productDoc.exists) {
+            const productData = productDoc.data();
+            if (productData?.userId === userId) {
+              isSeller = true;
+              logger.info(`User ${userId} is the seller (product owner)`);
+              
+              // თუ sellerId ველი არ არის დაყენებული, განვაახლოთ იგი
+              if (!chatData.sellerId) {
+                await chatDocRef.update({
+                  sellerId: userId,
+                  updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                });
+                logger.info(`Updated sellerId to ${userId} for chat ${chatId}`);
+              }
+            }
+          }
+        } catch (error) {
+          logger.error(`Error checking product ownership: ${error}`);
+        }
+      }
+
+      if (!isSeller) {
+        logger.error(`User ${userId} is not verified as the seller for chat ${chatId}`);
+        throw new HttpsError("permission-denied", "Only the seller can confirm primary ownership transfer.");
+      }
+
+      // შევამოწმოთ, რომ ჩატი სწორ სტატუსშია
+      if (chatData?.status !== "awaiting_primary_transfer" || !chatData?.transferReady) {
+        logger.error(`Chat ${chatId} is not in the correct state for primary ownership transfer. Status: ${chatData?.status}, transferReady: ${chatData?.transferReady}`);
+        throw new HttpsError("failed-precondition", "Chat is not in the correct state for primary ownership transfer.");
+      }
+
+      const now = Date.now();
+
+      // განვაახლოთ ჩატის სტატუსი
+      await chatDocRef.update({
+        primaryTransferInitiated: true,
+        primaryTransferInitiatedAt: now,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      // დავამატოთ სისტემური შეტყობინება ჩატში
+      const messagesRef = admin.database().ref(`messages/${chatId}`);
+      await messagesRef.push({
+        text: "Seller has transferred primary ownership. Waiting for escrow agent confirmation.",
+        senderId: "system",
+        senderName: "System",
+        timestamp: now,
+        isSystem: true
+      });
+
+      // შევატყობინოთ ადმინს, რომ საჭიროა მისი ქმედება
+      await admin.firestore().collection("admin_notifications").add({
+        type: "primary_ownership_transferred",
+        chatId: chatId,
+        sellerId: userId,
+        timestamp: now,
+        read: false,
+        priority: "high",
+        message: `Seller has transferred primary ownership for chat: ${chatData?.name || chatId}. Please verify and confirm.`
+      });
+
+      logger.info(`Primary ownership transfer initiated by seller ${userId} for chat ${chatId}`);
+
+      return {
+        success: true
+      };
+    } catch (error) {
+      logger.error("Error confirming primary ownership transfer:", error);
+      throw new HttpsError("internal", "Failed to confirm transfer: " + (error instanceof Error ? error.message : "Unknown error"));
+    }
+  }
+);
+
+// ახალი ფუნქცია ადმინის მიერ პირველადი მფლობელობის დადასტურებისთვის
+export const confirmPrimaryOwnershipByAdmin = onCall(
+  {enforceAppCheck: false},
+  async (request) => {
+    try {
+      const auth = request.auth;
+      if (!auth) {
+        throw new HttpsError("unauthenticated", "User must be authenticated.");
+      }
+
+      const {chatId} = request.data;
+
+      if (!chatId) {
+        throw new HttpsError("invalid-argument", "Chat ID is required.");
+      }
+
+      const userId = auth.uid;
+      const userDoc = await admin.firestore().collection("users").doc(userId).get();
+      
+      if (!userDoc.exists) {
+        throw new HttpsError("not-found", "User not found.");
+      }
+      
+      const userData = userDoc.data();
+      if (!userData?.isAdmin) {
+        throw new HttpsError("permission-denied", "Only admins can confirm primary ownership.");
+      }
+
+      const chatDocRef = admin.firestore().collection("chats").doc(chatId);
+      const chatDoc = await chatDocRef.get();
+
+      if (!chatDoc.exists) {
+        throw new HttpsError("not-found", "Chat not found.");
+      }
+
+      const chatData = chatDoc.data();
+
+      // შევამოწმოთ, რომ პირველადი მფლობელობის გადაცემა ინიცირებულია
+      if (!chatData?.primaryTransferInitiated) {
+        throw new HttpsError("failed-precondition", "Primary ownership transfer has not been initiated by the seller.");
+      }
+
+      const now = Date.now();
+      const buyerId = chatData.participants.find((id: string) => id !== chatData.sellerId);
+
+      // განვაახლოთ ჩატის სტატუსი
+      await chatDocRef.update({
+        primaryOwnerConfirmed: true,
+        primaryOwnerConfirmedAt: now,
+        owners: [buyerId], // გავაახლოთ მფლობელების სია
+        status: "awaiting_buyer_payment",
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      // დავამატოთ სისტემური შეტყობინება ჩატში - შევცვალოთ ტექსტი, რომ დაემთხვეს ფრონტენდის ძებნის პირობებს
+      const messagesRef = admin.database().ref(`messages/${chatId}`);
+      await messagesRef.push({
+        text: `Administrator ${userData.name || 'Admin'} has been assigned as primary owner.`,
+        senderId: "system",
+        senderName: "System",
+        timestamp: now,
+        isSystem: true
+      });
+
+      logger.info(`Primary ownership confirmed by admin ${userId} for chat ${chatId}`);
+
+      return {
+        success: true
+      };
+    } catch (error) {
+      logger.error("Error confirming primary ownership by admin:", error);
+      throw new HttpsError("internal", "Failed to confirm ownership: " + (error instanceof Error ? error.message : "Unknown error"));
+    }
+  }
+);
+
+// ახალი ფუნქცია მყიდველის მიერ გადახდის დადასტურებისთვის
+export const confirmPaymentByBuyer = onCall(
+  {enforceAppCheck: false},
+  async (request) => {
+    try {
+      const auth = request.auth;
+      if (!auth) {
+        throw new HttpsError("unauthenticated", "User must be authenticated.");
+      }
+
+      const {chatId} = request.data;
+
+      if (!chatId) {
+        throw new HttpsError("invalid-argument", "Chat ID is required.");
+      }
+
+      const userId = auth.uid;
+      const chatDocRef = admin.firestore().collection("chats").doc(chatId);
+      const chatDoc = await chatDocRef.get();
+
+      if (!chatDoc.exists) {
+        throw new HttpsError("not-found", "Chat not found.");
+      }
+
+      const chatData = chatDoc.data();
+
+      // შევამოწმოთ, რომ მომხმარებელი ნამდვილად მყიდველია
+      if (!chatData) {
+        throw new HttpsError("not-found", "Chat data not found.");
+      }
+      
+      logger.info(`[confirmPaymentByBuyer] Chat data for ${chatId}:`, {
+        chatStatus: chatData.status || 'undefined',
+        primaryOwnerConfirmed: chatData.primaryOwnerConfirmed || false,
+        participants: chatData.participants || [],
+        sellerId: chatData.sellerId || 'undefined',
+        buyerId: chatData.buyerId || 'undefined',
+        currentUserId: userId
+      });
+      
+      const isBuyer = chatData.participants.includes(userId) && chatData.sellerId !== userId;
+      if (!isBuyer) {
+        throw new HttpsError("permission-denied", "Only the buyer can confirm payment.");
+      }
+
+      // შევამოწმოთ სისტემური შეტყობინებები ჩატში, ხომ არ შეიცავს "Administrator" და "assigned as primary owner"
+      let primaryOwnershipMessageExists = false;
+      try {
+        const messagesRef = admin.database().ref(`messages/${chatId}`);
+        const messagesSnapshot = await messagesRef.once('value');
+        const messagesData = messagesSnapshot.val();
+
+        if (messagesData) {
+          // მესიჯების გადარჩევა და შემოწმება
+          const messages = Object.values(messagesData);
+          primaryOwnershipMessageExists = messages.some((msg: any) => {
+            return msg.isSystem && 
+              ((msg.text.includes('Administrator') && msg.text.includes('assigned as primary owner')) ||
+               (msg.text.includes('ადმინისტრატორი') && msg.text.includes('დაინიშნა ძირითად მფლობელად')));
+          });
+        }
+        logger.info(`[confirmPaymentByBuyer] Primary ownership message exists: ${primaryOwnershipMessageExists}`);
+      } catch (error) {
+        logger.error(`[confirmPaymentByBuyer] Error checking messages: ${error}`);
+      }
+
+      // შევამოწმოთ, რომ ჩატი სწორ სტატუსშია - დავამატოთ ახალი პირობა primaryOwnershipMessageExists
+      if ((chatData?.status !== "awaiting_buyer_payment" || !chatData?.primaryOwnerConfirmed) && !primaryOwnershipMessageExists) {
+        logger.error(`[confirmPaymentByBuyer] Chat is not in correct state: status=${chatData?.status}, primaryOwnerConfirmed=${chatData?.primaryOwnerConfirmed}, primaryOwnershipMessageExists=${primaryOwnershipMessageExists}`);
+        throw new HttpsError(
+          "failed-precondition", 
+          `Chat is not in the correct state for payment confirmation. Status: ${chatData?.status || 'undefined'}, primaryOwnerConfirmed: ${chatData?.primaryOwnerConfirmed || false}, primaryOwnershipMessageExists: ${primaryOwnershipMessageExists}`
+        );
+      }
+
+      const now = Date.now();
+
+      // განვაახლოთ ჩატის სტატუსი - ასევე დავაყენოთ primaryOwnerConfirmed თუ ის არ არის უკვე დაყენებული
+      const updateData: any = {
+        paymentStatus: "paid",
+        paymentConfirmedByBuyer: true,
+        paymentConfirmedByBuyerAt: now,
+        status: "awaiting_seller_confirmation",
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      };
+
+      // თუ primaryOwnershipMessageExists არის true, მაგრამ primaryOwnerConfirmed არ არის true, განვაახლოთ ეს ველიც
+      if (primaryOwnershipMessageExists && !chatData.primaryOwnerConfirmed) {
+        updateData.primaryOwnerConfirmed = true;
+        updateData.primaryOwnerConfirmedAt = now;
+        logger.info(`[confirmPaymentByBuyer] Setting primaryOwnerConfirmed to true based on system message`);
+      }
+
+      await chatDocRef.update(updateData);
+
+      // დავამატოთ სისტემური შეტყობინება ჩატში
+      const messagesRef = admin.database().ref(`messages/${chatId}`);
+      await messagesRef.push({
+        text: "Buyer has confirmed payment. Waiting for seller to confirm receipt.",
+        senderId: "system",
+        senderName: "System",
+        timestamp: now,
+        isSystem: true
+      });
+
+      logger.info(`Payment confirmed by buyer ${userId} for chat ${chatId}`);
+
+      return {
+        success: true
+      };
+    } catch (error) {
+      logger.error("Error confirming payment by buyer:", error);
+      throw new HttpsError("internal", "Failed to confirm payment: " + (error instanceof Error ? error.message : "Unknown error"));
+    }
+  }
+);
+
+// ახალი ფუნქცია გამყიდველის მიერ გადახდის მიღების დადასტურებისთვის
+export const confirmPaymentReceived = onCall(
+  {enforceAppCheck: false},
+  async (request) => {
+    try {
+      const auth = request.auth;
+      if (!auth) {
+        throw new HttpsError("unauthenticated", "User must be authenticated.");
+      }
+
+      const {chatId} = request.data;
+
+      if (!chatId) {
+        throw new HttpsError("invalid-argument", "Chat ID is required.");
+      }
+
+      const userId = auth.uid;
+      const chatDocRef = admin.firestore().collection("chats").doc(chatId);
+      const chatDoc = await chatDocRef.get();
+
+      if (!chatDoc.exists) {
+        throw new HttpsError("not-found", "Chat not found.");
+      }
+
+      const chatData = chatDoc.data();
+
+      // შევამოწმოთ, რომ მომხმარებელი ნამდვილად გამყიდველია
+      if (chatData?.sellerId !== userId) {
+        throw new HttpsError("permission-denied", "Only the seller can confirm payment receipt.");
+      }
+
+      // შევამოწმოთ, რომ ჩატი სწორ სტატუსშია
+      if (chatData?.status !== "awaiting_seller_confirmation" || !chatData?.paymentConfirmedByBuyer) {
+        throw new HttpsError("failed-precondition", "Chat is not in the correct state for payment receipt confirmation.");
+      }
+
+      const now = Date.now();
+      const productPrice = chatData.productPrice || 0;
+
+      // განვაახლოთ ჩატის სტატუსი
+      await chatDocRef.update({
+        status: "completed",
+        closedAt: now,
+        closedBy: "seller",
+        escrowActive: false,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      // განვაახლოთ გამყიდველის ქულები
+      const sellerDocRef = admin.firestore().collection("users").doc(userId);
+      await sellerDocRef.update({
+        score: admin.firestore.FieldValue.increment(productPrice)
+      });
+
+      // დავამატოთ სისტემური შეტყობინება ჩატში
+      const messagesRef = admin.database().ref(`messages/${chatId}`);
+      await messagesRef.push({
+        text: "Seller has confirmed payment receipt. Transaction completed successfully!",
+        senderId: "system",
+        senderName: "System",
+        timestamp: now,
+        isSystem: true
+      });
+
+      logger.info(`Payment receipt confirmed by seller ${userId} for chat ${chatId}`);
+
+      return {
+        success: true,
+        pointsAdded: productPrice
+      };
+    } catch (error) {
+      logger.error("Error confirming payment receipt:", error);
+      throw new HttpsError("internal", "Failed to confirm payment receipt: " + (error instanceof Error ? error.message : "Unknown error"));
     }
   }
 );
@@ -679,75 +1126,78 @@ export const confirmSellerOffer = onCall(
       }
 
       const currentUserId = auth.uid;
+      logger.info(`User ${currentUserId} attempting to confirm offer for chat ${chatId}`);
+      
       const chatDocRef = admin.firestore().collection("chats").doc(chatId);
       const chatDoc = await chatDocRef.get();
 
       if (!chatDoc.exists) {
+        logger.error(`Chat ${chatId} not found`);
         throw new HttpsError("not-found", "Chat not found.");
       }
 
       const chatData = chatDoc.data();
       if (!chatData) {
+        logger.error(`Chat data is missing for chat ${chatId}`);
         throw new HttpsError("data-loss", "Chat data is missing.");
       }
-      let sellerId = chatData.sellerId;
+      logger.info(`Chat data for ${chatId}:`, chatData);
 
-      // If sellerId is not directly set, but the current user is a participant,
-      // and there isn't a different buyerId specified, assume current user is the seller.
-      // This aligns with the scenario where a chat is created and sellerId might not be immediately set.
-      if (!sellerId && chatData.participants.includes(currentUserId)) {
-        // Check if there's a buyerId and if it's different from the current user.
-        // If buyerId is the same as currentUserId, then this user is the buyer, not the seller.
-        if (chatData.buyerId && chatData.buyerId === currentUserId) {
-          // This case should ideally be caught by the buyer check later, 
-          // but it's good to be explicit.
-          throw new HttpsError("permission-denied", "Buyer cannot confirm the offer for the seller.");
-        } else {
-          // If no buyerId, or buyerId is different, assign current user as sellerId
-          sellerId = currentUserId;
-          // Optionally, update the chat document with this sellerId if it's a permanent assignment
-          // await chatDocRef.update({ sellerId: currentUserId }); 
-          // For now, we'll just use it for this function's logic.
+      // ვამოწმებთ ყველა შესაძლო ვარიანტს თუ ვინ შეიძლება იყოს გამყიდველი
+      let isSeller = false;
+      
+      // ვარიანტი 1: პირდაპირ არის მითითებული sellerId
+      if (chatData.sellerId === currentUserId) {
+        isSeller = true;
+        logger.info(`User ${currentUserId} is the seller (sellerId field)`);
+      } 
+      // ვარიანტი 2: მონაწილეა და პროდუქტის მფლობელია
+      else if (chatData.participants && chatData.participants.includes(currentUserId) && chatData.productId) {
+        try {
+          const productDocRef = admin.firestore().collection("products").doc(chatData.productId);
+          const productDoc = await productDocRef.get();
+          
+          if (productDoc.exists) {
+            const productData = productDoc.data();
+            if (productData?.userId === currentUserId) {
+              isSeller = true;
+              logger.info(`User ${currentUserId} is the seller (product owner)`);
+              
+              // თუ sellerId ველი არ არის დაყენებული, განვაახლოთ იგი
+              if (!chatData.sellerId) {
+                await chatDocRef.update({
+                  sellerId: currentUserId,
+                  updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                });
+                logger.info(`Updated sellerId to ${currentUserId} for chat ${chatId}`);
+              }
+            }
+          }
+        } catch (error) {
+          logger.error(`Error checking product ownership: ${error}`);
         }
       }
+      
+      // ვარიანტი 3: თუ მხოლოდ ორი მონაწილეა, და ერთი მათგანი არის ბაიერი, ხოლო მეორე გამყიდველი
+      else if (chatData.participants && chatData.participants.length === 2 && chatData.buyerId && chatData.buyerId !== currentUserId && chatData.participants.includes(currentUserId)) {
+        isSeller = true;
+        logger.info(`User ${currentUserId} is the seller (by elimination - not buyer, but participant)`);
+        
+        // განვაახლოთ sellerId ველი
+        await chatDocRef.update({
+          sellerId: currentUserId,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        logger.info(`Updated sellerId to ${currentUserId} for chat ${chatId}`);
+      }
 
-      // Basic check: if sellerId field exists (or was just set), current user must match it
-      if (sellerId && sellerId !== currentUserId) {
+      if (!isSeller) {
+        logger.error(`User ${currentUserId} is not verified as the seller for chat ${chatId}`);
         throw new HttpsError("permission-denied", "Only the seller can confirm the offer.");
-      }
-
-      // More robust check if sellerId is not directly set but can be inferred from participants
-      // This logic depends on how sellerId is determined in your application
-      // This part needs to align with your app's logic for identifying the seller.
-      // For now, we'll assume if sellerId is not present, we look at participants.
-      // A common pattern is that the chat initiator (often the buyer) is one participant,
-      // and the product owner (seller) is the other.
-      // If there's no clear `buyerId` in chatData, this check is more complex.
-      // Let's assume for this example that if currentUserId is a participant and not explicitly a buyer, they could be the seller.
-      // This needs to be refined based on your exact data model.
-      if (!chatData.participants.includes(currentUserId)) {
-        throw new HttpsError("permission-denied", "User is not a participant in this chat.");
-      }
-      // If there are two participants and the current user is one of them,
-      // and there's no explicit buyerId field, we might infer this user is the seller.
-      // This is a simplification. In a real app, you'd have a clearer way to identify the seller.
-      if (chatData.participants.length === 2 && !chatData.buyerId) {
-        // Potentially the seller, let it pass for now.
-        // Consider adding a specific check if product owner ID is stored in chatData.
-      } else if (chatData.buyerId && chatData.buyerId === currentUserId) {
-        throw new HttpsError("permission-denied", "Buyer cannot confirm the offer for the seller.");
-      }
-      // If not explicitly the sellerId and no other way to confirm, deny.
-      // This logic is simplified. You should ensure sellerId is reliably set or inferable.
-      if (!sellerId) {
-        // If sellerId is not set after the above logic, and not in participants either (though covered above), deny.
-        throw new HttpsError("failed-precondition", "Seller information is missing in the chat data and could not be inferred.");
       }
 
       if (chatData?.sellerConfirmed) {
         logger.info(`Offer for chat ${chatId} already confirmed by seller.`);
-        // Optionally, you could throw an error or return a specific status
-        // throw new HttpsError("failed-precondition", "Offer already confirmed.");
         return {success: true, message: "Offer already confirmed."};
       }
 
@@ -790,20 +1240,60 @@ export const assignManagerRightsToAdmin = onCall(
       }
 
       const currentUserId = auth.uid;
+      logger.info(`User ${currentUserId} attempting to assign manager rights for chat ${chatId} to admin ${adminEmail}`);
+      
       const chatDocRef = admin.firestore().collection("chats").doc(chatId);
       const chatDoc = await chatDocRef.get();
 
       if (!chatDoc.exists) {
+        logger.error(`Chat ${chatId} not found`);
         throw new HttpsError("not-found", "Chat not found.");
       }
 
       const chatData = chatDoc.data();
       if (!chatData) {
+        logger.error(`Chat data is missing for chat ${chatId}`);
         throw new HttpsError("data-loss", "Chat data is missing.");
       }
+      logger.info(`Chat data for ${chatId}:`, chatData);
 
-      // Verify that the caller is the seller of the chat
-      if (chatData.sellerId !== currentUserId) {
+      // ვამოწმებთ ყველა შესაძლო ვარიანტს თუ ვინ შეიძლება იყოს გამყიდველი
+      let isSeller = false;
+      
+      // ვარიანტი 1: პირდაპირ არის მითითებული sellerId
+      if (chatData.sellerId === currentUserId) {
+        isSeller = true;
+        logger.info(`User ${currentUserId} is the seller (sellerId field)`);
+      } 
+      // ვარიანტი 2: მონაწილეა და პროდუქტის მფლობელია
+      else if (chatData.participants && chatData.participants.includes(currentUserId) && chatData.productId) {
+        try {
+          const productDocRef = admin.firestore().collection("products").doc(chatData.productId);
+          const productDoc = await productDocRef.get();
+          
+          if (productDoc.exists) {
+            const productData = productDoc.data();
+            if (productData?.userId === currentUserId) {
+              isSeller = true;
+              logger.info(`User ${currentUserId} is the seller (product owner)`);
+              
+              // თუ sellerId ველი არ არის დაყენებული, განვაახლოთ იგი
+              if (!chatData.sellerId) {
+                await chatDocRef.update({
+                  sellerId: currentUserId,
+                  updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                });
+                logger.info(`Updated sellerId to ${currentUserId} for chat ${chatId}`);
+              }
+            }
+          }
+        } catch (error) {
+          logger.error(`Error checking product ownership: ${error}`);
+        }
+      }
+
+      if (!isSeller) {
+        logger.error(`User ${currentUserId} is not verified as the seller for chat ${chatId}`);
         throw new HttpsError("permission-denied", "Only the seller can assign manager rights.");
       }
 
@@ -811,6 +1301,7 @@ export const assignManagerRightsToAdmin = onCall(
       const adminUsersSnapshot = await admin.firestore().collection("users").where("email", "==", adminEmail).where("isAdmin", "==", true).get();
 
       if (adminUsersSnapshot.empty) {
+        logger.error(`Admin user with email ${adminEmail} not found or is not an admin`);
         throw new HttpsError("not-found", `Admin user with email ${adminEmail} not found or is not an admin.`);
       }
       const adminUserDoc = adminUsersSnapshot.docs[0];

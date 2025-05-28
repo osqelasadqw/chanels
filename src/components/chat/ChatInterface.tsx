@@ -1,23 +1,56 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import Image from "next/image";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { Chat, Message } from "@/types/chat";
 import { db, rtdb, functions, auth } from "@/firebase/config";
 import { ref, push, onValue, off } from "firebase/database";
-import { doc, getDoc, updateDoc, onSnapshot } from "firebase/firestore";
+import { doc, getDoc, updateDoc, onSnapshot, getDocs, query, where } from "firebase/firestore";
 import { addDoc, collection } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import React from "react";
 import EmojiPicker, { EmojiClickData } from "emoji-picker-react";
+import { getStorageFileUrl } from "@/firebase/channelLogos";
+import { toast } from "react-hot-toast";
+import { useRouter } from "next/navigation"; // დავამატოთ router-ის იმპორტი
 
 interface ChatInterfaceProps {
   chatId: string;
   productId: string;
 }
 
+// დავამატოთ ფუნქცია არხის ლოგოს მისაღებად
+const getChannelLogoFromStorage = async (path: string): Promise<string | null> => {
+  try {
+    // შევამოწმოთ მისამართი ვალიდურია თუ არა
+    if (!path || typeof path !== 'string') {
+      console.error('Invalid logo path:', path);
+      return null;
+    }
+    
+    // API გამოძახებით გამოვითხოვოთ ლოგოს URL
+    const response = await fetch(`/api/channel-logo?path=${encodeURIComponent(path)}`);
+    
+    if (!response.ok) {
+      throw new Error(`Failed to fetch logo: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    
+    if (data.url) {
+      return data.url;
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Error fetching channel logo:', error);
+    return null;
+  }
+};
+
 export default function ChatInterface({ chatId, productId }: ChatInterfaceProps) {
+  const router = useRouter(); // დავამატოთ useRouter
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [loading, setLoading] = useState(true);
@@ -41,6 +74,29 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
   const [showEmojiPicker, setShowEmojiPicker] = useState<boolean>(false); // სმაილების გამოჩენის კონტროლი
   const emojiPickerRef = useRef<HTMLDivElement>(null); // სმაილების კონტეინერის რეფერენსი
   
+  // დავამატოთ სტეიტი შეფასების დატოვების მდგომარეობის შესანახად
+  const [hasLeftReview, setHasLeftReview] = useState<boolean>(false);
+  
+  // ვამატებთ isSeller ცვლადს, რომელიც განსაზღვრავს არის თუ არა მიმდინარე მომხმარებელი გამყიდველი
+  const [productData, setProductData] = useState<any | null>(null);
+  
+  // isSeller ლოგიკა გავაუმჯობესოთ, რომ შეამოწმოს პროდუქტის მფლობელობა
+  const isSeller = user?.id && chatData?.sellerId && user.id === chatData.sellerId;
+  
+  // ახალი სტეიტი, გამოვიყენოთ მყიდველის იდენტიფიცირებისთვის
+  const [buyerId, setBuyerId] = useState<string | null>(null);
+  
+  // განვსაზღვროთ calcBuyerId - მყიდველის იდენტიფიკაციისთვის
+  const calcBuyerId = chatData && chatData.participants && chatData.sellerId ? 
+    chatData.participants.find(id => id !== chatData.sellerId) : null;
+  
+  // გავაუმჯობესოთ isBuyer ლოგიკა, გავაერთიანოთ ყველა პირობა
+  const isBuyer = !isSeller && user?.id && (
+    (calcBuyerId && user.id === calcBuyerId) || 
+    (chatData?.buyerId && user.id === chatData?.buyerId) || 
+    (chatData?.participants && chatData.participants.includes(user.id))
+  );
+  
   // ტაიმერის სტეიტები
   const [transferTimerStarted, setTransferTimerStarted] = useState<boolean>(false);
   const [transferReadyTime, setTransferReadyTime] = useState<number | null>(null);
@@ -50,7 +106,19 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
   // ახალი სტეიტები timerActive-ისთვის და ტაიმერის დროებისთვის
   const [timerActive, setTimerActive] = useState<boolean>(false);
   const [timerEndDate, setTimerEndDate] = useState<number | null>(null);
-
+  
+  // ახალი სტეიტები პირველადი მფლობელობის გადაცემისთვის
+  const [transferReady, setTransferReady] = useState<boolean>(false);
+  const [primaryTransferInitiated, setPrimaryTransferInitiated] = useState<boolean>(false);
+  const [primaryOwnerConfirmed, setPrimaryOwnerConfirmed] = useState<boolean>(false);
+  const [submittingPrimaryTransfer, setSubmittingPrimaryTransfer] = useState<boolean>(false);
+  const [confirmingPrimaryOwnership, setConfirmingPrimaryOwnership] = useState<boolean>(false);
+  const [confirmingBuyerPayment, setConfirmingBuyerPayment] = useState<boolean>(false);
+  const [confirmingPaymentReceipt, setConfirmingPaymentReceipt] = useState<boolean>(false);
+  const [showReviewModal, setShowReviewModal] = useState<boolean>(false);
+  const [buyerConfirmedPayment, setBuyerConfirmedPayment] = useState<boolean>(false);
+  const [sellerConfirmedReceipt, setSellerConfirmedReceipt] = useState<boolean>(false);
+  
   // ფუნქცია ტაიმერის განახლებისთვის - მდებარეობს კომპონენტის დასაწყისში, ჰუკების შემდეგ
   const updateRemainingTime = () => {
     if (!transferReadyTime) return;
@@ -95,6 +163,8 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
     setRemainingTime(null);
     setWalletAddress("");
     setShowPaymentDropdown(false);
+    setBuyerConfirmedPayment(false);
+    setSellerConfirmedReceipt(false);
     
     // გავასუფთავოთ ინტერვალი, თუ ის არსებობს
     if (intervalRef.current) {
@@ -122,6 +192,44 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
           // Check payment status
           const isPaymentDone = !!data.paymentCompleted;
           setPaymentCompleted(isPaymentDone);
+          
+          // ახალი სტატუსების შემოწმება
+          setTransferReady(!!data.transferReady);
+          setPrimaryTransferInitiated(!!data.primaryTransferInitiated);
+          setPrimaryOwnerConfirmed(!!data.primaryOwnerConfirmed);
+          setBuyerConfirmedPayment(!!data.buyerConfirmedPayment);
+          setSellerConfirmedReceipt(!!data.sellerConfirmedReceipt);
+          
+          // დავადგინოთ მყიდველის ID
+          if (data.buyerId) {
+            // თუ chat-ში უკვე არის მითითებული მყიდველის ID
+            setBuyerId(data.buyerId);
+          } else if (data.sellerId && data.participants) {
+            // თუ ჩატში არის გამყიდველის ID, მაშინ მყიდველი არის სხვა მონაწილე
+            const potentialBuyerId = data.participants.find(id => id !== data.sellerId);
+            if (potentialBuyerId) {
+              setBuyerId(potentialBuyerId);
+              // ასევე განვაახლოთ Firestore-ში ჩატის დოკუმენტი, რომ შევინახოთ მყიდველის ID
+              try {
+                await updateDoc(chatDocRef, { buyerId: potentialBuyerId });
+              } catch (err) {
+                console.error("Error updating buyerId in chat:", err);
+              }
+            }
+          }
+          
+          // შევამოწმოთ, დატოვებული აქვს თუ არა მომხმარებელს შეფასება
+          // შევამოწმოთ reviews კოლექციაში
+          if (user) {
+            const reviewsQuery = query(
+              collection(db, "reviews"), 
+              where("chatId", "==", chatId),
+              where("reviewerId", "==", user.id)
+            );
+            
+            const reviewsSnapshot = await getDocs(reviewsQuery);
+            setHasLeftReview(!reviewsSnapshot.empty);
+          }
           
           // ტაიმერის მონაცემების შემოწმება - ახალი კოდი ტაიმერის სწორად აღმოსაჩენად
           
@@ -198,6 +306,23 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
           // ეს საშუალებას გვაძლევს დავინახოთ გადახდის სტატუსის ცვლილები მყისიერად
           fetchChatData();
         }
+        
+        // შევამოწმოთ სისტემური შეტყობინება მფლობელის დანიშვნის შესახებ
+        const adminConfirmationMsg = messageList.find(msg => 
+          msg.isSystem && 
+          (msg.text.includes("Administrator") && msg.text.includes("assigned as primary owner"))
+        );
+        
+        if (adminConfirmationMsg) {
+          setPrimaryOwnerConfirmed(true);
+          
+          // მოვსინჯოთ განახლება Firestore-შიც
+          const chatDocRef = doc(db, "chats", chatId);
+          updateDoc(chatDocRef, {
+            primaryOwnerConfirmed: true,
+            status: "awaiting_buyer_payment"
+          }).catch(err => console.error("Failed to update chat with primaryOwnerConfirmed:", err));
+        }
       } else {
         // თუ მონაცემები არ არის, ცარიელი მასივი დავაყენოთ
         setMessages([]);
@@ -227,6 +352,13 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
         if (updatedChatData.sellerConfirmed) {
           setSellerConfirmed(true);
         }
+        
+        // შევამოწმოთ ახალი სტატუსები
+        setTransferReady(!!updatedChatData.transferReady);
+        setPrimaryTransferInitiated(!!updatedChatData.primaryTransferInitiated);
+        setPrimaryOwnerConfirmed(!!updatedChatData.primaryOwnerConfirmed);
+        setBuyerConfirmedPayment(!!updatedChatData.buyerConfirmedPayment);
+        setSellerConfirmedReceipt(!!updatedChatData.sellerConfirmedReceipt);
       }
     });
 
@@ -260,18 +392,24 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
     if (!newMessage.trim() || !user || !chatId) return;
 
     try {
+      // გავიმახსოვროთ მესიჯის ტექსტი გაგზავნამდე, რომ პრობლემის შემთხვევაში აღვადგინოთ
+      const messageText = newMessage.trim();
+      
       const messagesRef = ref(rtdb, `messages/${chatId}`);
       
       const timestamp = Date.now();
       
       // Check if this is an escrow request message
-      const isEscrowRequest = newMessage.trim().includes("🔒 Request to Purchase");
+      const isEscrowRequest = messageText.includes("🔒 Request to Purchase");
       
       // გადავამოწმოთ რომ მომხმარებლის ფოტოს URL სწორია და არის სტრინგი
       const photoURL = typeof user.photoURL === 'string' ? user.photoURL : null;
       
+      // წავშალოთ შეყვანილი ტექსტი მხოლოდ წარმატებული გაგზავნის შემდეგ
+      setNewMessage("");
+      
       await push(messagesRef, {
-        text: newMessage.trim(),
+        text: messageText,
         senderId: user.id,
         senderName: user.name,
         senderPhotoURL: photoURL, // მომხმარებლის ფოტო, თუ აქვს
@@ -287,18 +425,25 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
         const chatDocRef = doc(db, "chats", chatId);
         await updateDoc(chatDocRef, {
           lastMessage: {
-            text: newMessage.trim(),
+            text: messageText,
             timestamp: timestamp,
             senderId: user.id
           }
         });
       } catch (err) {
         // Error updating chat lastMessage
+        console.error("Error updating chat lastMessage:", err);
       }
       
-      setNewMessage("");
+      // დავაფიქსიროთ გაგზავნის წარმატება
+      console.log("Message sent successfully:", messageText);
+      
     } catch (err) {
+      console.error("Failed to send message:", err);
       setError("Failed to send message");
+      
+      // გაგზავნის შეცდომის შემთხვევაში შევინარჩუნოთ შეყვანილი ტექსტი
+      // არ ვშლით newMessage-ს
     }
   };
 
@@ -439,6 +584,11 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
       const assignRightsFunction = httpsCallable(functions, 'assignManagerRightsToAdmin');
       await assignRightsFunction({ chatId, adminEmail });
       
+      // დავიმახსოვროთ არჩეული ადმინის მეილი ლოკალურ სტორიჯში
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('lastSelectedAgentEmail', adminEmail);
+      }
+      
       setEscrowAgentAssigned(true); // Update state to hide the button
       // Optionally, update chatData locally or rely on Firestore listener
       alert(`Manager rights assigned to ${adminEmail}. The admin has been notified.`);
@@ -533,6 +683,13 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
   const MessageItem = ({ message }: { message: Message }) => {
     const { user } = useAuth();
     const isOwn = message.senderId === user?.id;
+    
+    // დავამატოთ პროფილის გვერდზე გადასვლის ფუნქცია
+    const navigateToProfile = (userId: string) => {
+      if (userId) {
+        router.push(`/profile/${userId}`);
+      }
+    };
 
     // Check if this is an escrow request message
     const isEscrowRequest = (message.isEscrowRequest || (message.text && message.text.includes("🔒 Request to Purchase")));
@@ -592,11 +749,34 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
           
           <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 mt-4">
             <div className="font-medium text-blue-800 mb-1">Transaction status:</div>
-            {paymentCompleted ? (
+            {chatData?.status === "completed" ? (
+              <p className="text-green-700">Transaction completed successfully!</p>
+            ) : primaryOwnerConfirmed ? (
               <p className="text-green-700">
                 {isSeller ? 
-                  "The buyer has paid. Now, you need to designate the escrow agent's account as manager. The escrow agent's email is indicated below. If you don't have a button for transferring administrative rights, that means you have not yet linked the channel with the brand's account. Follow these instructions in order to link your account. " :
-                  "You've paid, and we've notified the seller. We're waiting for the seller to designate the escrow agent as manager. The seller has 23:56:08 left to do this, after which we will offer you a refund"
+                  "The escrow agent is now primary owner and has removed other owners. Please confirm when you receive payment from the buyer." :
+                  "The escrow agent is now primary owner and has removed other owners. You may now pay the seller directly."
+                }
+              </p>
+            ) : primaryTransferInitiated ? (
+              <p className="text-blue-700">
+                {isSeller ? 
+                  "You've initiated the primary ownership transfer. Waiting for escrow agent confirmation." :
+                  "The seller has initiated the primary ownership transfer. Waiting for escrow agent confirmation."
+                }
+              </p>
+            ) : transferReady ? (
+              <p className="text-blue-700">
+                {isSeller ? 
+                  "The 7-day waiting period has ended. You can now transfer primary ownership rights." :
+                  "The 7-day waiting period has ended. Waiting for the seller to transfer primary ownership rights."
+                }
+              </p>
+            ) : paymentCompleted ? (
+              <p className="text-green-700">
+                {isSeller ? 
+                  "The buyer has paid. Now, you need to designate the escrow agent's account as manager. The escrow agent's email is indicated below. If you don't have a button for transferring administrative rights, that means you have not yet linked the channel with the brand's account." :
+                  "You've paid, and we've notified the seller. We're waiting for the seller to designate the escrow agent as manager."
                 }
               </p>
             ) : sellerConfirmed ? (
@@ -738,16 +918,7 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
           {/* If payment is completed show confirmation */}
           {paymentCompleted && (
             <div className="mt-4 border-t border-gray-200 pt-4">
-              {/* The following div containing the message will be removed
-              <div className="flex items-center bg-green-50 text-green-700 p-3 rounded-lg border border-green-200">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 mr-2 text-green-500">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <span className="font-medium">Payment completed! Transaction process started.</span>
-              </div>
-              */}
-              
-              {/* Escrow agent information section is removed from here */}
+              {/* ეს კოდი დარჩება როგორც არის */}
             </div>
           )}
         </div>
@@ -836,11 +1007,34 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
           
           <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 mt-4">
             <div className="font-medium text-blue-800 mb-1">Transaction status:</div>
-            {paymentCompleted ? (
+            {chatData?.status === "completed" ? (
+              <p className="text-green-700">Transaction completed successfully!</p>
+            ) : primaryOwnerConfirmed ? (
               <p className="text-green-700">
                 {isSeller ? 
-                  "The buyer has paid. Now, you need to designate the escrow agent's account as manager. The escrow agent's email is indicated below. If you don't have a button for transferring administrative rights, that means you have not yet linked the channel with the brand's account. Follow these instructions in order to link your account. You have 23:59:30 to do this, after which we will offer the buyer a refund." :
-                  "You've paid, and we've notified the seller. We're waiting for the seller to designate the escrow agent as manager. The seller has 23:56:08 left to do this, after which we will offer you a refund"
+                  "The escrow agent is now primary owner and has removed other owners. Please confirm when you receive payment from the buyer." :
+                  "The escrow agent is now primary owner and has removed other owners. You may now pay the seller directly."
+                }
+              </p>
+            ) : primaryTransferInitiated ? (
+              <p className="text-blue-700">
+                {isSeller ? 
+                  "You've initiated the primary ownership transfer. Waiting for escrow agent confirmation." :
+                  "The seller has initiated the primary ownership transfer. Waiting for escrow agent confirmation."
+                }
+              </p>
+            ) : transferReady ? (
+              <p className="text-blue-700">
+                {isSeller ? 
+                  "The 7-day waiting period has ended. You can now transfer primary ownership rights." :
+                  "The 7-day waiting period has ended. Waiting for the seller to transfer primary ownership rights."
+                }
+              </p>
+            ) : paymentCompleted ? (
+              <p className="text-green-700">
+                {isSeller ? 
+                  "The buyer has paid. Now, you need to designate the escrow agent's account as manager. The escrow agent's email is indicated below. If you don't have a button for transferring administrative rights, that means you have not yet linked the channel with the brand's account." :
+                  "You've paid, and we've notified the seller. We're waiting for the seller to designate the escrow agent as manager."
                 }
               </p>
             ) : sellerConfirmed ? (
@@ -982,46 +1176,53 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
           {/* If payment is completed show confirmation */}
           {paymentCompleted && (
             <div className="mt-4 border-t border-gray-200 pt-4">
-              {/* The following div containing the message will be removed
-              <div className="flex items-center bg-green-50 text-green-700 p-3 rounded-lg border border-green-200">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 mr-2 text-green-500">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <span className="font-medium">Payment completed! Transaction process started.</span>
-              </div>
-              */}
-              
-              {/* Escrow agent information section is removed from here */}
+              {/* ეს კოდი დარჩება როგორც არის */}
             </div>
           )}
         </div>
       );
     }
     
+      // Regular message
+    
     // Regular message
     return (
       <div className={`flex mb-4 ${isOwn ? 'justify-end' : 'justify-start'}`}>
         {!isOwn && (
-          <div className="h-12 w-12 rounded-full overflow-hidden mr-2 flex-shrink-0 border border-gray-200 shadow-sm">
+          <div 
+            className="h-12 w-12 rounded-full overflow-hidden mr-2 flex-shrink-0 border border-gray-200 shadow-sm cursor-pointer"
+            onClick={() => navigateToProfile(message.senderId)}
+            title="View profile"
+          >
             {message.isAdmin ? (
-              // ამ შემთხვევაში ვაჩვენებთ ადმინის სურათს მესიჯიდან, ან სტანდარტულ agent.png-ს
               <Image 
-                src={chatData?.adminPhotoURL || message.senderPhotoURL || "/agent.png"}
+                src={chatData?.adminPhotoURL || message.senderPhotoURL || ""}
                 alt="Escrow Agent"
                 width={48}
                 height={48}
                 className="h-full w-full object-cover p-0"
                 priority
                 onError={(e) => {
-                  // თუ სურათის ჩატვირთვა ვერ მოხერხდა, ჩავანაცვლოთ სტანდარტული ავატარით
+                  // თუ სურათის ჩატვირთვა ვერ მოხერხდა, გამოვსახოთ მხოლოდ ინიციალები
                   const target = e.target as HTMLImageElement;
                   target.onerror = null;
-                  target.src = '/agent.png';
+                  // წავშალოთ სურათის URL, რომ დავმალოთ გატეხილი სურათის ხატულა
+                  target.style.display = 'none';
+                  // მშობელი ელემენტის სტილი შევცვალოთ
+                  if (target.parentElement) {
+                    target.parentElement.classList.add('bg-green-500');
+                    target.parentElement.classList.add('flex');
+                    target.parentElement.classList.add('items-center');
+                    target.parentElement.classList.add('justify-center');
+                    target.parentElement.classList.add('text-white');
+                    target.parentElement.classList.add('font-medium');
+                    // ინიციალი დავამატოთ
+                    target.parentElement.innerHTML = '<div>A</div>';
+                  }
                 }}
                 unoptimized
               />
             ) : message.senderPhotoURL ? (
-              // ჩვეულებრივი მომხმარებლის ან სისტემური შეტყობინების ფოტო, თუ არის
               <Image 
                 src={message.senderPhotoURL} 
                 alt={message.senderName}
@@ -1030,20 +1231,31 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
                 className="h-full w-full object-cover"
                 priority
                 onError={(e) => {
-                  // თუ სურათის ჩატვირთვა ვერ მოხერხდა, ჩავანაცვლოთ სტანდარტული ავატარით
+                  // თუ სურათის ჩატვირთვა ვერ მოხერხდა, ჩავანაცვლოთ ინიციალით
                   const target = e.target as HTMLImageElement;
-                  target.onerror = null; // თავიდან ავიცილოთ უსასრულო რეკურსია
-                  target.src = '/agent.png';
+                  target.onerror = null;
+                  target.style.display = 'none';
+                  // მშობელი ელემენტის სტილი შევცვალოთ
+                  if (target.parentElement) {
+                    target.parentElement.classList.add('bg-gradient-to-br');
+                    target.parentElement.classList.add('from-indigo-500');
+                    target.parentElement.classList.add('to-blue-500');
+                    target.parentElement.classList.add('flex');
+                    target.parentElement.classList.add('items-center');
+                    target.parentElement.classList.add('justify-center');
+                    target.parentElement.classList.add('text-white');
+                    target.parentElement.classList.add('font-medium');
+                    // ინიციალი დავამატოთ
+                    target.parentElement.innerHTML = `<div>${message.senderName.charAt(0).toUpperCase()}</div>`;
+                  }
                 }}
                 unoptimized
               />
             ) : message.isSystem && message.senderName === "System" ? (
-              // სისტემური შეტყობინება ფოტოს გარეშე
               <div className="h-full w-full bg-yellow-500 flex items-center justify-center text-white font-bold">
                 S
               </div>
             ) : (
-              // სტანდარტული ავატარი მომხმარებლის სახელის პირველი ასოთი
               <div className="h-full w-full bg-gradient-to-br from-indigo-500 to-blue-500 flex items-center justify-center text-white font-medium">
                 {message.senderName.charAt(0).toUpperCase()}
               </div>
@@ -1051,23 +1263,17 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
           </div>
         )}
         
-        <div 
-          className={`max-w-[80%] p-3 rounded-lg shadow-sm ${isOwn 
-              ? 'bg-gradient-to-r from-indigo-600 to-blue-500 text-white rounded-tr-none' 
-              : message.isAdmin 
-                ? 'bg-green-100 text-green-800 rounded-tl-none border border-green-200' 
-                : message.isSystem
-                  ? 'bg-yellow-50 text-yellow-800 border border-yellow-200'
-                  : 'bg-white text-gray-800 rounded-tl-none border border-gray-100'
-          }`}
-        >
-          {!isOwn && !message.isAdmin && !message.isSystem && (
-            <div className="text-sm font-medium mb-1 text-indigo-800">{message.senderName}</div>
-          )}
+        <div className={`rounded-lg py-2 px-3 ${
+          isOwn ? 'bg-gradient-to-r from-indigo-600 to-blue-500 text-white' :
+          message.isEscrowRequest ? 'bg-blue-100 text-blue-800 border border-blue-200' : 
+          message.isAdmin ? 'bg-green-50 text-green-800 border border-green-200' : 
+          message.isSystem ? 'bg-yellow-50 text-yellow-800 border border-yellow-200' : 
+          'bg-white border border-gray-100 shadow-sm text-gray-800'
+        } max-w-[85%] md:max-w-[70%] break-words`}>
           {message.isAdmin && (
             <div className="text-xs font-medium mb-1 text-green-600 flex items-center">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3 mr-1">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 01-1.043 3.296 3.745 3.745 0 01-3.296 1.043A3.745 3.745 0 0112 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 01-3.296-1.043 3.745 3.745 0 01-1.043-3.296A3.745 3.745 0 013 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 011.043-3.296 3.746 3.746 0 013.296-1.043A3.746 3.746 0 0112 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 013.296 1.043 3.746 3.746 0 011.043 3.296A3.745 3.745 0 0121 12z" />
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3 h-3 mr-1">
+                <path fillRule="evenodd" d="M10 1a4.5 4.5 0 00-4.5 4.5V9H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-.5V5.5A4.5 4.5 0 0010 1zm3 8V5.5a3 3 0 10-6 0V9h6z" clipRule="evenodd" />
               </svg>
               Escrow Agent
             </div>
@@ -1089,20 +1295,36 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
         </div>
         
         {isOwn && (
-          <div className="h-12 w-12 rounded-full overflow-hidden ml-2 flex-shrink-0 border border-gray-200 shadow-sm">
+          <div 
+            className="h-12 w-12 rounded-full overflow-hidden ml-2 flex-shrink-0 border border-gray-200 shadow-sm cursor-pointer"
+            onClick={() => navigateToProfile(message.senderId)}
+            title="View profile"
+          >
             {message.isAdmin ? (
               <Image 
-                src={chatData?.adminPhotoURL || message.senderPhotoURL || "/agent.png"}
+                src={chatData?.adminPhotoURL || message.senderPhotoURL || ""}
                 alt="Escrow Agent"
                 width={48}
                 height={48}
                 className="h-full w-full object-cover p-0"
                 priority
                 onError={(e) => {
-                  // თუ სურათის ჩატვირთვა ვერ მოხერხდა, ჩავანაცვლოთ სტანდარტული ავატარით
+                  // თუ სურათის ჩატვირთვა ვერ მოხერხდა, გამოვსახოთ მხოლოდ ინიციალები
                   const target = e.target as HTMLImageElement;
                   target.onerror = null;
-                  target.src = '/agent.png';
+                  // წავშალოთ სურათის URL, რომ დავმალოთ გატეხილი სურათის ხატულა
+                  target.style.display = 'none';
+                  // მშობელი ელემენტის სტილი შევცვალოთ
+                  if (target.parentElement) {
+                    target.parentElement.classList.add('bg-green-500');
+                    target.parentElement.classList.add('flex');
+                    target.parentElement.classList.add('items-center');
+                    target.parentElement.classList.add('justify-center');
+                    target.parentElement.classList.add('text-white');
+                    target.parentElement.classList.add('font-medium');
+                    // ინიციალი დავამატოთ
+                    target.parentElement.innerHTML = '<div>A</div>';
+                  }
                 }}
                 unoptimized
               />
@@ -1115,10 +1337,23 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
                 className="h-full w-full object-cover"
                 priority
                 onError={(e) => {
-                  // თუ სურათის ჩატვირთვა ვერ მოხერხდა, ჩავანაცვლოთ სტანდარტული ავატარით
+                  // თუ სურათის ჩატვირთვა ვერ მოხერხდა, ჩავანაცვლოთ ინიციალით
                   const target = e.target as HTMLImageElement;
-                  target.onerror = null; // თავიდან ავიცილოთ უსასრულო რეკურსია
-                  target.src = '/agent.png';
+                  target.onerror = null;
+                  target.style.display = 'none';
+                  // მშობელი ელემენტის სტილი შევცვალოთ
+                  if (target.parentElement) {
+                    target.parentElement.classList.add('bg-gradient-to-br');
+                    target.parentElement.classList.add('from-indigo-500');
+                    target.parentElement.classList.add('to-blue-500');
+                    target.parentElement.classList.add('flex');
+                    target.parentElement.classList.add('items-center');
+                    target.parentElement.classList.add('justify-center');
+                    target.parentElement.classList.add('text-white');
+                    target.parentElement.classList.add('font-medium');
+                    // ინიციალი დავამატოთ
+                    target.parentElement.innerHTML = `<div>${message.senderName.charAt(0).toUpperCase()}</div>`;
+                  }
                 }}
                 unoptimized
               />
@@ -1400,7 +1635,16 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
     }
   };
   
-  // ეფექტი ადმინის მეილების მისაღებად - აღარ გვჭირდება
+  // ეფექტი ადმინის მეილების მისაღებად და წინა არჩეული მეილის აღსადგენად
+  useEffect(() => {
+    // აღვადგინოთ შენახული აგენტის მეილი ლოკალური სტორიჯიდან
+    if (typeof window !== 'undefined') {
+      const savedAgentEmail = localStorage.getItem('lastSelectedAgentEmail');
+      if (savedAgentEmail) {
+        setSelectedAgentEmail(savedAgentEmail);
+      }
+    }
+  }, []);
 
   // ადმინის მოწვევის კომპონენტი, რომელიც მხოლოდ გამყიდველისთვის იქნება ხილული
   const AdminInviteComponent = () => {
@@ -1460,6 +1704,688 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
     };
   }, [showPaymentDropdown, showAgentEmailDropdown, showEmojiPicker]);
 
+  // ახალი ფუნქცია გამყიდველის მიერ პირველადი მფლობელობის გადაცემის დასადასტურებლად
+  const handlePrimaryOwnershipTransfer = async () => {
+    if (!user || !chatId) return;
+    
+    try {
+      setSubmittingPrimaryTransfer(true);
+      
+      const confirmTransferFunction = httpsCallable(functions, 'confirmPrimaryOwnershipTransfer');
+      const result = await confirmTransferFunction({ chatId });
+      
+      const data = result.data as { success: boolean };
+      
+      if (data.success) {
+        // განვაახლოთ ლოკალური მდგომარეობა
+        setPrimaryTransferInitiated(true);
+        
+        // განვაახლოთ ჩატის დოკუმენტი Firestore-ში
+        const chatDocRef = doc(db, "chats", chatId);
+        await updateDoc(chatDocRef, {
+          primaryTransferInitiated: true,
+          updatedAt: Date.now()
+        });
+        
+        // განახლება მოხდება Firestore listener-ის მეშვეობით
+        alert("Primary ownership transfer initiated successfully!");
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      alert(`Failed to confirm primary ownership transfer: ${errorMessage}`);
+      setError(errorMessage);
+    } finally {
+      setSubmittingPrimaryTransfer(false);
+    }
+  };
+  
+  // ახალი ფუნქცია ადმინის მიერ პირველადი მფლობელობის დადასტურებისთვის
+  const handleConfirmPrimaryOwnership = async () => {
+    if (!user || !chatId || !user.isAdmin) return;
+    
+    try {
+      setConfirmingPrimaryOwnership(true);
+      
+      const confirmOwnershipFunction = httpsCallable(functions, 'confirmPrimaryOwnershipByAdmin');
+      const result = await confirmOwnershipFunction({ chatId });
+      
+      const data = result.data as { success: boolean };
+      
+      if (data.success) {
+        // ლოკალურადაც დავაყენოთ primary ownership დადასტურებული მდგომარეობა
+        setPrimaryOwnerConfirmed(true);
+        
+        // ვამატებთ სისტემურ შეტყობინებას
+        const systemMessage = {
+          id: `system_${Date.now()}`,
+          text: "Administrator assigned as primary owner. Buyer can now pay the seller.",
+          senderId: "system",
+          senderName: "System",
+          timestamp: Date.now(),
+          isSystem: true,
+        };
+        
+        setMessages(prevMessages => [...prevMessages, systemMessage]);
+        
+        // შევამოწმოთ თუ არის toast ფუნქცია
+        if (typeof toast !== 'undefined') {
+          toast.success("Primary ownership confirmed successfully");
+        } else {
+          alert("Primary ownership confirmed successfully!");
+        }
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      
+      // შევამოწმოთ თუ არის toast ფუნქცია
+      if (typeof toast !== 'undefined') {
+        toast.error(`Failed to confirm primary ownership: ${errorMessage}`);
+      } else {
+        alert(`Failed to confirm primary ownership: ${errorMessage}`);
+      }
+      
+      setError(errorMessage);
+    } finally {
+      setConfirmingPrimaryOwnership(false);
+    }
+  };
+  
+  // ახალი ფუნქცია მყიდველის მიერ გადახდის დადასტურებისთვის
+  const handleConfirmPaymentByBuyer = async () => {
+    if (!user || !chatId) return;
+    
+    try {
+      setConfirmingBuyerPayment(true);
+      
+      const confirmPaymentFunction = httpsCallable(functions, 'confirmPaymentByBuyer');
+      const result = await confirmPaymentFunction({ chatId });
+      
+      const data = result.data as { success: boolean };
+      
+      if (data.success) {
+        // მივანიჭოთ მნიშვნელობა ლოკალურ სტეიტს
+        setBuyerConfirmedPayment(true);
+        
+        // განვაახლოთ ჩატის დოკუმენტი Firestore-ში
+        const chatDocRef = doc(db, "chats", chatId);
+        await updateDoc(chatDocRef, {
+          buyerConfirmedPayment: true,
+          status: "awaiting_seller_confirmation"
+        });
+        
+        // განახლება მოხდება Firestore listener-ის მეშვეობით
+        alert("Payment confirmed successfully!");
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      alert(`Failed to confirm payment: ${errorMessage}`);
+      setError(errorMessage);
+    } finally {
+      setConfirmingBuyerPayment(false);
+    }
+  };
+  
+  // ახალი ფუნქცია გამყიდველის მიერ გადახდის მიღების დადასტურებისთვის
+  const handleConfirmPaymentReceived = async () => {
+    if (!user || !chatId) return;
+    
+    try {
+      setConfirmingPaymentReceipt(true);
+      
+      const confirmReceiptFunction = httpsCallable(functions, 'confirmPaymentReceived');
+      const result = await confirmReceiptFunction({ chatId });
+      
+      const data = result.data as { success: boolean, pointsAdded: number };
+      
+      if (data.success) {
+        // მივანიჭოთ მნიშვნელობა ლოკალურ სტეიტს
+        setSellerConfirmedReceipt(true);
+        
+        try {
+          // განვაახლოთ მომხმარებლის ქულები მონაცემთა ბაზაში
+          const userDocRef = doc(db, "users", user.id);
+          
+          // ჯერ მივიღოთ მიმდინარე მომხმარებლის მონაცემები
+          const userDoc = await getDoc(userDocRef);
+          
+          if (userDoc.exists()) {
+            // გამოვითვალოთ ახალი ქულების რაოდენობა
+            const currentPoints = userDoc.data().points || 0;
+            const newPoints = currentPoints + data.pointsAdded;
+            
+            // განვაახლოთ მომხმარებლის ქულები Firestore-ში
+            await updateDoc(userDocRef, {
+              points: newPoints
+            });
+            
+            console.log(`User points updated from ${currentPoints} to ${newPoints}`);
+            
+            // დავაყენოთ წარმატებული ტრანზაქციის სტატუსი
+            const chatDocRef = doc(db, "chats", chatId);
+            await updateDoc(chatDocRef, {
+              status: "completed",
+              completedAt: Date.now(),
+              sellerConfirmedReceipt: true
+            });
+          }
+        } catch (updateError) {
+          console.error("Failed to update user points:", updateError);
+        }
+        
+        // განახლება მოხდება Firestore listener-ის მეშვეობით
+        alert(`Transaction completed successfully! You earned ${data.pointsAdded} points.`);
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      alert(`Failed to confirm payment receipt: ${errorMessage}`);
+      setError(errorMessage);
+    } finally {
+      setConfirmingPaymentReceipt(false);
+    }
+  };
+
+  // დავამატოთ შეფასების მოდალის კომპონენტი
+  const ReviewModal = () => {
+    if (!showReviewModal) return null;
+    
+    const [rating, setRating] = useState<number>(5);
+    const [review, setReview] = useState<string>("");
+    const [submitting, setSubmitting] = useState<boolean>(false);
+    const [sentiment, setSentiment] = useState<'positive' | 'negative' | null>(null);
+    
+    const handleSubmitReview = async () => {
+      if (!user || !chatId || !chatData) return;
+      
+      if (!sentiment) {
+        alert("გთხოვთ აირჩიოთ შეფასების ტიპი (პოზიტიური ან ნეგატიური)");
+        return;
+      }
+      
+      try {
+        setSubmitting(true);
+        
+        // მივიღოთ პროდუქტის ინფორმაცია ფასის გასაგებად
+        const currentProductId = chatData.productId || productId;
+        let productPrice = 0;
+        let productData = null;
+        
+        if (currentProductId) {
+          const productDocRef = doc(db, "products", currentProductId);
+          const productDoc = await getDoc(productDocRef);
+          
+          if (productDoc.exists()) {
+            productData = productDoc.data();
+            // პროდუქტის ფასის მიხედვით ქულების დარიცხვა (1 ლარი = 1 ქულა)
+            productPrice = productData.price || 0;
+          }
+        }
+        
+        // შევინახოთ შეფასება Firestore-ში - დავამატოთ მეტი ინფორმაცია გადახდის შესახებ
+        await addDoc(collection(db, "reviews"), {
+          chatId,
+          productId: chatData.productId || productId,
+          reviewerId: user.id,
+          reviewerName: user.name,
+          reviewerPhotoURL: user.photoURL,
+          sellerId: chatData.sellerId,
+          buyerId: chatData.buyerId || chatData.participants.find(id => id !== chatData.sellerId),
+          sellerName: (chatData.sellerId && chatData.participantNames?.[chatData.sellerId]) || "Seller",
+          paymentAmount: productPrice > 0 ? productPrice.toString() : "N/A", // შევინახოთ გადახდის თანხა
+          price: productPrice > 0 ? productPrice.toString() : undefined, // თავსებადობისთვის
+          channelName: productData?.channelName || chatData.productName || "Channel",
+          rating,
+          comment: review,
+          timestamp: new Date(),
+          sentiment: sentiment,
+          reviewerRole: isSeller ? "seller" : "buyer",
+          // დამატებითი მეტამონაცემები სერვერზე ძიებისთვის
+          transactionComplete: true,
+          transactionDate: chatData.completedAt || Date.now()
+        });
+        
+        // განვაახლოთ გამყიდველის რეიტინგი და შეფასებები
+        // მხოლოდ მყიდველის მიერ დატოვებული შეფასებები უნდა აისახოს გამყიდველის რეიტინგზე
+        if (isBuyer && chatData.sellerId) {
+          const sellerId = chatData.sellerId;
+          const sellerDocRef = doc(db, "users", sellerId);
+          const sellerDoc = await getDoc(sellerDocRef);
+          
+          if (sellerDoc.exists()) {
+            const sellerData = sellerDoc.data();
+            
+            // არსებული მონაცემები
+            const currentRating = sellerData.rating || 0;
+            const currentRatingCount = sellerData.ratingCount || 0;
+            const currentPositive = sellerData.positiveRatings || 0;
+            const currentNegative = sellerData.negativeRatings || 0;
+            
+            // განახლებები sentiment-ის მიხედვით
+            let updateData = {};
+            
+            if (sentiment === 'positive') {
+              // დადებითი შეფასებისთვის
+              updateData = {
+                positiveRatings: currentPositive + 1,
+                rating: currentRating + 1,
+                ratingCount: currentRatingCount + 1
+              };
+            } else if (sentiment === 'negative') {
+              // უარყოფითი შეფასებისთვის
+              updateData = {
+                negativeRatings: currentNegative + 1,
+                ratingCount: currentRatingCount + 1
+              };
+            }
+            
+            // განვაახლოთ გამყიდველის მონაცემები
+            await updateDoc(sellerDocRef, updateData);
+            
+            // ქულები მხოლოდ გამყიდველს უნდა დავურიცხოთ და მხოლოდ მაშინ, 
+            // როცა მყიდველმა დატოვა დადებითი შეფასება
+            if (sentiment === 'positive' && productPrice > 0) {
+              const pointsToAdd = Math.floor(productPrice);
+              
+              // მიმდინარე ქულების მიღება
+              const currentPoints = sellerData.points || 0;
+              // ახალი ქულების გამოთვლა
+              const newPoints = currentPoints + pointsToAdd;
+              
+              // განვაახლოთ გამყიდველის ქულები Firestore-ში
+              await updateDoc(sellerDocRef, {
+                points: newPoints
+              });
+              
+              console.log(`Seller points updated from ${currentPoints} to ${newPoints}`);
+            }
+          }
+        }
+        
+        // დავხუროთ მოდალი
+        setShowReviewModal(false);
+        // დავაყენოთ რომ მომხმარებელს დატოვებული აქვს შეფასება
+        setHasLeftReview(true);
+        
+        // შევატყობინოთ მომხმარებელს შეფასების დატოვების შესახებ
+        alert("Thank you for your review!");
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        alert(`Failed to submit review: ${errorMessage}`);
+      } finally {
+        setSubmitting(false);
+      }
+    };
+    
+    // ვაფიქსირებთ ფუნქციას, რომელიც გამოიყენება click event-ის შესაჩერებლად
+    const stopPropagation = (e: React.MouseEvent) => {
+      e.stopPropagation();
+    };
+    
+    return (
+      <div className="fixed inset-0 flex items-center justify-center z-50" onClick={() => setShowReviewModal(false)}>
+        <div className="bg-white rounded-lg p-6 w-full max-w-md mx-4" onClick={stopPropagation}>
+          <h3 className="text-xl font-bold mb-4">Leave a Review</h3>
+          
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">შეფასების ტიპი</label>
+            <div className="flex space-x-3 mb-4">
+              <button
+                type="button"
+                onClick={() => setSentiment('positive')}
+                className={`flex-1 py-2 px-4 rounded-md font-medium transition-colors ${
+                  sentiment === 'positive' 
+                    ? 'bg-green-500 text-white' 
+                    : 'border border-gray-300 text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                <div className="flex items-center justify-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 10h4.764a2 2 0 011.789 2.894l-3.5 7A2 2 0 0115.263 21h-4.017c-.163 0-.326-.02-.485-.06L7 20m7-10V5a2 2 0 00-2-2h-.095c-.5 0-.905.405-.905.905 0 .714-.211 1.412-.608 2.006L7 11v9m7-10h-2M7 20H5a2 2 0 01-2-2v-6a2 2 0 012-2h2.5" />
+                  </svg>
+                  პოზიტიური
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setSentiment('negative')}
+                className={`flex-1 py-2 px-4 rounded-md font-medium transition-colors ${
+                  sentiment === 'negative' 
+                    ? 'bg-red-500 text-white' 
+                    : 'border border-gray-300 text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                <div className="flex items-center justify-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 14H5.236a2 2 0 01-1.789-2.894l3.5-7A2 2 0 018.736 3h4.018a2 2 0 01.485.06l3.76.94m-7 10v5a2 2 0 002 2h.096c.5 0 .905-.405.905-.904 0-.715.211-1.413.608-2.008L17 13V4m-7 10h2" />
+                  </svg>
+                  ნეგატიური
+                </div>
+              </button>
+            </div>
+          </div>
+          
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">Rating</label>
+            <div className="flex space-x-2">
+              {[1, 2, 3, 4, 5].map((star) => (
+                <button
+                  key={star}
+                  type="button"
+                  onClick={() => setRating(star)}
+                  className="text-2xl focus:outline-none"
+                >
+                  {star <= rating ? "★" : "☆"}
+                </button>
+              ))}
+            </div>
+          </div>
+          
+          <div className="mb-4">
+            <label htmlFor="review" className="block text-sm font-medium text-gray-700 mb-1">Your Review</label>
+            <textarea
+              id="review"
+              rows={4}
+              value={review}
+              onChange={(e) => setReview(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+              placeholder="Write your review here..."
+            />
+          </div>
+          
+          <div className="flex justify-end space-x-2">
+            <button
+              type="button"
+              onClick={() => setShowReviewModal(false)}
+              className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleSubmitReview}
+              disabled={submitting || !sentiment}
+              className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none disabled:opacity-50"
+            >
+              {submitting ? "Submitting..." : "Submit Review"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // დავამატოთ შეფასების ღილაკი ჩატში
+  const ReviewMessage = () => {
+    if (!user || hasLeftReview || !chatData) return null;
+
+    // შევამოწმოთ არის თუ არა ტრანზაქცია დასრულებული 
+    // მხოლოდ completed სტატუსის შემთხვევაში ვაჩვენოთ შეფასების ღილაკი
+    if (chatData.status !== "completed") return null;
+
+    // ვინახავთ მომხმარებლის როლს ლოკალურად
+    const isSellerForReview = user.id === chatData.sellerId;
+    const isBuyerForReview = !isSellerForReview && chatData.participants && chatData.participants.includes(user.id);
+
+    // ვაჩვენოთ შეფასების ღილაკი როგორც გამყიდველს, ასევე მყიდველს
+    if (!isSellerForReview && !isBuyerForReview) return null;
+
+    return (
+      <div className="flex justify-start my-4">
+        <div className="bg-white border border-indigo-100 rounded-lg shadow-sm p-4 w-full max-w-md">
+          <div className="text-center mb-3">
+            <h3 className="font-medium text-gray-800">How was your experience?</h3>
+            <p className="text-sm text-gray-500">
+              {isSellerForReview 
+                ? "Share your feedback about the buyer"
+                : "Share your feedback about the seller and channel"
+              }
+            </p>
+          </div>
+          <button
+            onClick={handleReviewButtonClick}
+            className="w-full bg-gradient-to-r from-indigo-500 to-blue-500 hover:from-indigo-600 hover:to-blue-600 text-white py-2 px-4 rounded-lg font-medium transition-colors duration-200"
+          >
+            Leave a Review
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // დავამატოთ შეფასების ღილაკზე დაჭერისთვის
+  const handleReviewButtonClick = () => {
+    setShowReviewModal(true);
+  };
+
+  // Create a new component for system action messages with action buttons
+  const SystemActionMessage = () => {
+    // Only show for the most recent request message
+    const requestMessage = messages.find(msg => msg.isRequest || msg.isEscrowRequest);
+    if (!requestMessage) return null;
+
+    // განვსაზღვროთ მიმდინარე მომხმარებელი არის თუ არა მყიდველი ან გამყიდველი
+    const isSeller = (user?.id && chatData?.sellerId && user.id === chatData.sellerId) || 
+                    (user?.id && productData?.userId && user.id === productData.userId);
+    const buyerId = chatData && chatData.participants && chatData.sellerId ? 
+      chatData.participants.find((id: string) => id !== chatData.sellerId) : null;
+    const isUserBuyer = !isSeller && (
+      (user?.id === buyerId) || 
+      (user?.id === chatData?.buyerId) || 
+      (user?.id && chatData?.participants?.includes(user.id))
+    );
+
+    // გამყიდველისთვის "transferred primary ownership" ღილაკი - მხოლოდ გამყიდველისთვის
+    // CRITICAL FIX: უზრუნველვყოთ რომ ეს ღილაკი მხოლოდ ნამდვილ გამყიდველს უჩვენოს
+    const isRealSeller = user?.id && (
+      // პროდუქტის ნამდვილი მფლობელი
+      (productData?.userId && user.id === productData.userId && user.email === productData.userEmail) ||
+      // ან ჩატში განსაზღვრული გამყიდველი და პროდუქტის მფლობელი ერთი და იგივე პიროვნებაა
+      (chatData?.sellerId && user.id === chatData.sellerId && productData?.userId && user.id === productData.userId)
+    );
+    
+    if ((isRealSeller || user?.isAdmin) && transferReady && !primaryTransferInitiated) {
+      return (
+        <div className="flex justify-start my-4">
+          <div className="bg-white border border-indigo-200 rounded-lg shadow-sm p-4 w-full max-w-xl">
+            <div className="text-center mb-3">
+              <h3 className="font-medium text-gray-800">The 7-day waiting period has ended</h3>
+              <p className="text-sm text-gray-500">The primary ownership rights can now be transferred.</p>
+            </div>
+            <button 
+              onClick={handlePrimaryOwnershipTransfer}
+              disabled={submittingPrimaryTransfer}
+              className={`w-full bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-all ${submittingPrimaryTransfer ? 'opacity-80 cursor-not-allowed' : ''}`}
+            >
+              {submittingPrimaryTransfer ? (
+                <div className="flex items-center justify-center">
+                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-2"></div>
+                  <span>Processing...</span>
+                </div>
+              ) : (
+                "I transferred primary ownership"
+              )}
+            </button>
+            <div className="mt-2 text-xs text-gray-500 text-center">
+              Click this button when you've transferred primary ownership rights to the escrow agent.
+            </div>
+          </div>
+        </div>
+      );
+    }
+    
+    // ადმინისთვის "I am primary owner" ღილაკი
+    if (user?.isAdmin && primaryTransferInitiated && !primaryOwnerConfirmed) {
+      return (
+        <div className="flex justify-start my-4">
+          <div className="bg-white border border-green-200 rounded-lg shadow-sm p-4 w-full max-w-xl">
+            <div className="text-center mb-3">
+              <h3 className="font-medium text-gray-800">Primary ownership transfer initiated</h3>
+              <p className="text-sm text-gray-500">Seller has transferred primary ownership. Waiting for escrow agent confirmation.</p>
+            </div>
+            <button 
+              onClick={handleConfirmPrimaryOwnership}
+              disabled={confirmingPrimaryOwnership}
+              className={`w-full bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 transition-all ${confirmingPrimaryOwnership ? 'opacity-80 cursor-not-allowed' : ''}`}
+            >
+              {confirmingPrimaryOwnership ? (
+                <div className="flex items-center justify-center">
+                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-2"></div>
+                  <span>Confirming...</span>
+                </div>
+              ) : (
+                "I am primary owner now"
+              )}
+            </button>
+            <div className="mt-2 text-xs text-gray-500 text-center">
+              Click this button to confirm that you are now the primary owner of the channel.
+            </div>
+          </div>
+        </div>
+      );
+    }
+    
+    // მყიდველისთვის "paid" ღილაკი - გადავამოწმოთ გაუმჯობესებული პირობებით
+    // მყიდველისთვის "paid" ღილაკი - დავამატოთ მრავალი პირობა რომლითაც შეიძლება ეს ღილაკი გამოჩნდეს
+    if ((isUserBuyer || user?.isAdmin) && (
+      primaryOwnerConfirmed || 
+      chatData?.primaryOwnerConfirmed || 
+      chatData?.status === "awaiting_buyer_payment" ||
+      // დავამატოთ პირობა მესიჯების სკანირებისთვის
+      messages.some(msg => 
+        msg.isSystem && 
+        (msg.text.includes("Administrator") && msg.text.includes("assigned as primary owner"))
+    )
+  ) && !buyerConfirmedPayment) {
+    return (
+      <div className="flex justify-start my-4">
+        <div className="bg-white border border-blue-200 rounded-lg shadow-sm p-4 w-full max-w-xl">
+          <div className="text-center mb-3">
+            <h3 className="font-medium text-gray-800">Ready for payment</h3>
+            <p className="text-sm text-gray-500">
+              {primaryOwnerConfirmed || chatData?.primaryOwnerConfirmed || 
+               messages.some(msg => msg.isSystem && 
+                 ((msg.text.includes("Administrator") && msg.text.includes("assigned as primary owner")) ||
+                  (msg.text.includes("Administrator") && msg.text.includes("assigned as primary owner"))))
+                ? "The escrow agent is now the primary owner. You can now pay the seller directly." 
+                : "The seller has initiated primary ownership transfer. You can now pay the seller directly."}
+            </p>
+          </div>
+          <button 
+            onClick={handleConfirmPaymentByBuyer}
+            disabled={confirmingBuyerPayment}
+            className={`w-full bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-all ${confirmingBuyerPayment ? 'opacity-80 cursor-not-allowed' : ''}`}
+          >
+            {confirmingBuyerPayment ? (
+              <div className="flex items-center justify-center">
+                <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-2"></div>
+                <span>Confirming...</span>
+              </div>
+            ) : (
+              "I paid the seller"
+            )}
+          </button>
+          <div className="mt-2 text-xs text-gray-500 text-center">
+            Click this button to confirm that you've paid the seller directly.
+          </div>
+        </div>
+      </div>
+    );
+  }
+  
+  // გამყიდველისთვის "payment received" ღილაკი - ცვლილება: მხოლოდ მყიდველისთვის გამოჩნდეს
+  // გამყიდველისთვის "payment received" ღილაკი
+  // გამოვიყენოთ იგივე პირობა რაც გვაქვს primary ownership ღილაკისთვის
+  const isRealSellerForPayment = user?.id && (
+    // პროდუქტის ნამდვილი მფლობელი
+    (productData?.userId && user.id === productData.userId && user.email === productData.userEmail) ||
+    // ან ჩატში განსაზღვრული გამყიდველი და პროდუქტის მფლობელი ერთი და იგივე პიროვნებაა
+    (chatData?.sellerId && user.id === chatData.sellerId && productData?.userId && user.id === productData.userId)
+  );
+  
+  // შევცვალოთ პირობა: გამოჩნდეს მხოლოდ ადმინისთვის, აღარ გამოჩნდეს გამყიდველისთვის (isRealSellerForPayment)
+  if ((user?.isAdmin) && (chatData?.status === "awaiting_seller_confirmation" || 
+      (chatData?.buyerConfirmedPayment && !chatData?.sellerConfirmedReceipt))) {
+    return (
+      <div className="flex justify-start my-4">
+        <div className="bg-white border border-green-200 rounded-lg shadow-sm p-4 w-full max-w-xl">
+          <div className="text-center mb-3">
+            <h3 className="font-medium text-gray-800">Payment confirmation</h3>
+            <p className="text-sm text-gray-500">The buyer has confirmed payment. Please confirm when you've received it.</p>
+          </div>
+          <button 
+            onClick={handleConfirmPaymentReceived}
+            disabled={confirmingPaymentReceipt}
+            className={`w-full bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 transition-all ${confirmingPaymentReceipt ? 'opacity-80 cursor-not-allowed' : ''}`}
+          >
+            {confirmingPaymentReceipt ? (
+              <div className="flex items-center justify-center">
+                <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-2"></div>
+                <span>Confirming...</span>
+              </div>
+            ) : (
+              "Payment received"
+            )}
+          </button>
+          <div className="mt-2 text-xs text-gray-500 text-center">
+            Click this button to confirm that you've received payment from the buyer and complete the transaction.
+          </div>
+        </div>
+      </div>
+    );
+  }
+  
+  return null;
+};
+
+  // დავამატოთ პროდუქტის მონაცემების მოთხოვნა
+  useEffect(() => {
+    if (!productId || !user) return;
+
+    const fetchProductData = async () => {
+      try {
+        const productDocRef = doc(db, "products", productId);
+        const productDoc = await getDoc(productDocRef);
+        
+        if (productDoc.exists()) {
+          const data = productDoc.data();
+          setProductData(data);
+        }
+      } catch (err) {
+        console.error("Error fetching product data:", err);
+      }
+    };
+
+    fetchProductData();
+  }, [productId, user]);
+
+  // UseEffect დამატება შეფასების შემოწმებისთვის
+  useEffect(() => {
+    // მხოლოდ მაშინ ვამოწმებთ, როდესაც ჩატის მონაცემები არსებობს და მომხმარებელი შესულია
+    if (chatData && user && chatId) {
+      const checkExistingReview = async () => {
+        try {
+          // შევამოწმოთ Firestore-ში არსებობს თუ არა ამ მომხმარებლის მიერ დატოვებული შეფასება ამ ჩატისთვის
+          const reviewsRef = collection(db, "reviews");
+          const q = query(
+            reviewsRef,
+            where("chatId", "==", chatId),
+            where("reviewerId", "==", user.id)
+          );
+          
+          const reviewSnapshot = await getDocs(q);
+          
+          // თუ უკვე არსებობს შეფასება, მაშინ დავაყენოთ hasLeftReview ფლაგი true-ზე
+          if (!reviewSnapshot.empty) {
+            setHasLeftReview(true);
+          }
+        } catch (error) {
+          console.error("Error checking existing review:", error);
+        }
+      };
+      
+      checkExistingReview();
+    }
+  }, [chatData, user, chatId]);
+
   return (
     <div className="flex flex-col w-full h-full overflow-hidden">
       {loading ? (
@@ -1482,7 +2408,13 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
             {/* Messages will be mapped directly here. The parent div (overflow-y-auto) has space-y-4. */}
             {messages.map((message, index) => {
               const isRequestOrEscrowMessage = message.isRequest || message.isEscrowRequest;
-              const showEscrowDetailsBlock = paymentCompleted && user && chatData && user.id === chatData.sellerId;
+              
+              // CRITICAL FIX: მხოლოდ ნამდვილი გამყიდველისთვის უნდა გამოჩნდეს Escrow Agent Details
+              // ვამოწმებთ რომ მომხმარებელი არის პროდუქტის მფლობელი ან ჩატში განსაზღვრული გამყიდველი
+              const isProductOwner = user?.id === productData?.userId && user?.email === productData?.userEmail;
+              const isChatSeller = user?.id === chatData?.sellerId && user?.id === productData?.userId;
+              const showEscrowDetailsBlock = paymentCompleted && user && chatData && productData && (isProductOwner || isChatSeller);
+              
               const hasMoreMessages = messages.length > index + 1;
               return (
                 <React.Fragment key={message.id}>
@@ -1582,6 +2514,12 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
               );
             })}
 
+            {/* Add the system action message component to show action buttons */}
+            <SystemActionMessage />
+
+            {/* დავამატოთ შეფასების ღილაკი ჩატში */}
+            <ReviewMessage />
+
             {/* messagesEndRef is now a direct child of the scrollable container */}
             <div ref={messagesEndRef} />
 
@@ -1645,6 +2583,11 @@ export default function ChatInterface({ chatId, productId }: ChatInterfaceProps)
           </button>
         </div>
       </form>
+
+      {/* დავამატოთ შეფასების მოდალი */}
+      <ReviewModal />
+
+
     </div>
   );
 } 
